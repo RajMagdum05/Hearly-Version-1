@@ -1,0 +1,9 @@
+{
+  "name": "Hearly",
+  "version": "1.0.0",
+  "description": "AI-powered voice focus tool for meetings",
+  "manifest_version": 3,
+  "action": {
+    "default_popup": "index.html"
+  }
+}
