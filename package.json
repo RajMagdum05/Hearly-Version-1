@@ -1,0 +1,10 @@
+{
+  "name": "hearly-v1-again",
+  "private": true,
+  "workspaces": ["hearly-extension"],
+  "scripts": {
+    "dev": "npm run dev --workspace hearly-extension",
+    "build": "npm run build --workspace hearly-extension",
+    "preview": "npm run preview --workspace hearly-extension"
+  }
+}
