@@ -1,4 +1,4 @@
-import { StrictMode, useState } from 'react';
+import { StrictMode, useState, useEffect } from 'react';
 import { createRoot } from 'react-dom/client';
 import './styles/popup.css';
 import { useEnrollmentStore } from '@/store/enrollmentStore';
@@ -15,6 +15,7 @@ import type { PopupTabId } from '@/ui/navigation/popupTabId';
 import { useFilterStore } from '@/store/filterStore';
 import { useTranscriptStore } from '@/store/transcriptStore';
 import { RoadmapModal } from '@/features/home/RoadmapModal';
+import { loadEnrollmentState, loadFilterState, loadTranscriptState, clearEnrollmentState, saveEnrollmentState, saveFilterState, saveTranscriptState } from '@/services/storageService';
 function PopupApp() {
   const [tab, setTab] = useState<PopupTabId>('home');
   const [roadmapOpen, setRoadmapOpen] = useState(false);
@@ -33,6 +34,33 @@ function PopupApp() {
   const latestEntry = entries.at(-1);
 
   const { settings, ready, update } = useSettings();
+  const { setEnrolled, setPhase } = useEnrollmentStore((s) => s.actions);
+  const setFilterActive = useFilterStore((s) => s.actions.setActive);
+  const setTranscriptEnabled = useTranscriptStore((s) => s.actions.setEnabled);
+
+  useEffect(() => {
+    // Restore enrollment
+    loadEnrollmentState().then((saved) => {
+      if (saved?.isEnrolled) {
+        setEnrolled(true, saved.userName ?? '');
+        setPhase('done');
+      }
+    });
+
+    // Restore filter toggle
+    loadFilterState().then((saved) => {
+      if (saved !== null) {
+        setFilterActive(saved.isActive);
+      }
+    });
+
+    // Restore transcript toggle
+    loadTranscriptState().then((saved) => {
+      if (saved !== null) {
+        setTranscriptEnabled(saved.isEnabled);
+      }
+    });
+  }, [setEnrolled, setPhase, setFilterActive, setTranscriptEnabled]);
 
   const openEnrollment = () => {
     setEnrollmentOpen(true);
@@ -60,6 +88,7 @@ function PopupApp() {
           });
           enrollmentActions.setPhase('done');
           setEnrollmentOpen(false);
+          saveEnrollmentState({ isEnrolled: true, userName: name });
         }}
       />
     );
@@ -107,7 +136,55 @@ function PopupApp() {
                     <HearlyToggle
                       embedded
                       checked={filterActive}
-                      onCheckedChange={(v) => filterActions.setActive(v)}
+                      onCheckedChange={(v) => {
+                        filterActions.setActive(v);
+                        saveFilterState(v);
+
+                        if (!v) {
+                          // Toggle OFF — tell background to stop audio
+                          chrome.runtime.sendMessage({ type: 'POPUP_TOGGLE_AUDIO_OFF' });
+                          return;
+                        }
+
+                        // Toggle ON — get the active meeting tab first
+                        chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+                          const tab = tabs[0];
+                          if (!tab?.id) {
+                            console.warn('[Hearly] No active tab found');
+                            return;
+                          }
+
+                          const url = tab.url ?? '';
+                          const isMeetingTab =
+                            url.includes('meet.google.com') ||
+                            url.includes('zoom.us') ||
+                            url.includes('teams.microsoft.com') ||
+                            url.includes('teams.live.com');
+
+                          if (!isMeetingTab) {
+                            console.warn('[Hearly] Not a meeting tab:', url);
+                            return;
+                          }
+
+                          // tabCapture MUST be called from popup (user gesture context)
+                          chrome.tabCapture.getMediaStreamId(
+                            { consumerTabId: tab.id },
+                            (streamId: string) => {
+                              if (chrome.runtime.lastError || !streamId) {
+                                console.warn('[Hearly] tabCapture failed:', chrome.runtime.lastError?.message);
+                                return;
+                              }
+                              console.log('[Hearly] Got streamId from popup, forwarding...');
+                              // Forward streamId to content script via background
+                              chrome.runtime.sendMessage({
+                                type: 'POPUP_TOGGLE_AUDIO_ON',
+                                streamId,
+                                tabId: tab.id
+                              });
+                            }
+                          );
+                        });
+                      }}
                     />
                     <div
                       className="my-1 h-px bg-gradient-to-r from-transparent via-white/[0.12] to-transparent"
@@ -115,7 +192,10 @@ function PopupApp() {
                     />
                     <TranscriptToggle
                       checked={transcriptEnabled}
-                      onCheckedChange={(v) => transcriptActions.setEnabled(v)}
+                      onCheckedChange={(v) => {
+                        transcriptActions.setEnabled(v);
+                        saveTranscriptState(v);
+                      }}
                       latestEntry={latestEntry}
                     />
                   </div>
@@ -159,7 +239,14 @@ function PopupApp() {
                 }
                 onNotifyEmails={(v) => update({ ...settings, notifyEmails: v })}
                 onRetrain={openEnrollment}
-                onRemoveConfirmed={() => enrollmentActions.clearProfile()}
+                onRemoveConfirmed={() => {
+                  enrollmentActions.clearProfile();
+                  clearEnrollmentState();
+                  saveFilterState(false);
+                  saveTranscriptState(false);
+                  filterActions.setActive(false);
+                  transcriptActions.setEnabled(false);
+                }}
               />
             </div>
           </div>

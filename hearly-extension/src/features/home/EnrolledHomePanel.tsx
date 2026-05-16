@@ -1,8 +1,11 @@
 import { ListeningWaveform } from '@/ui/animations/ListeningWaveform';
+import { AudioWaveform } from '@/ui/shared/AudioWaveform';
 
 export interface EnrolledHomePanelProps {
   userName: string;
   filterActive: boolean;
+  analyser: AnalyserNode | null;
+  capturing: boolean;
 }
 
 /**
@@ -11,6 +14,8 @@ export interface EnrolledHomePanelProps {
 export function EnrolledHomePanel({
   userName,
   filterActive,
+  analyser,
+  capturing,
 }: EnrolledHomePanelProps) {
   return (
     <section className="flex w-full shrink-0 flex-col items-center px-0.5">
@@ -18,6 +23,15 @@ export function EnrolledHomePanel({
         Voice Enrolled for{' '}
         <span className="font-semibold text-hearly-accent">{userName}</span>
       </p>
+
+      {capturing && (
+        <div className="mt-4 w-full max-w-[300px] rounded-xl border border-white/[0.07] bg-white/[0.025] p-3">
+          <p className="mb-2 text-[10px] font-semibold uppercase tracking-[0.12em] text-hearly-tertiary">
+            Live Audio
+          </p>
+          <AudioWaveform analyser={analyser} isActive={capturing} />
+        </div>
+      )}
 
       <div
         className="mt-5 w-full max-w-[300px] px-0.5"

@@ -9,6 +9,7 @@ interface EnrollmentState {
   actions: {
     setPhase: (phase: EnrollmentPhase) => void;
     setProfile: (profile: VoiceProfile | null) => void;
+    setEnrolled: (isEnrolled: boolean, userName: string) => void;
     clearProfile: () => void;
   };
 }
@@ -20,6 +21,7 @@ export const useEnrollmentStore = create<EnrollmentState>((set) => ({
   voiceProfile: null,
   actions: {
     setPhase: (phase) => set({ phase }),
+    setEnrolled: (isEnrolled, userName) => set({ isEnrolled, userName }),
     setProfile: (voiceProfile) =>
       set({
         voiceProfile,

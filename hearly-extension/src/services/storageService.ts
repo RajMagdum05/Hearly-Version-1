@@ -29,3 +29,70 @@ export async function saveAppSettings(settings: AppSettings): Promise<void> {
   if (!isChromeExtension()) return;
   await chrome.storage.local.set({ [STORAGE_KEYS.appSettings]: settings });
 }
+
+export async function saveEnrollmentState(data: {
+  isEnrolled: boolean
+  userName: string
+}): Promise<void> {
+  return new Promise((resolve) => {
+    chrome.storage.local.set({ hearly_enrollment: data }, resolve)
+  })
+}
+
+export async function loadEnrollmentState(): Promise<{
+  isEnrolled: boolean
+  userName: string
+} | null> {
+  return new Promise((resolve) => {
+    chrome.storage.local.get('hearly_enrollment', (result) => {
+      const data = result.hearly_enrollment as { isEnrolled: boolean; userName: string } | undefined
+      resolve(data ?? null)
+    })
+  })
+}
+
+export async function clearEnrollmentState(): Promise<void> {
+  return new Promise((resolve) => {
+    chrome.storage.local.remove(
+      [
+        'hearly_enrollment',
+        'hearly_filter',
+        'hearly_transcript',
+        'hearly_voice_profile',
+        'hearly_app_settings',
+        'hearly_transcript_meta'
+      ],
+      resolve
+    )
+  })
+}
+
+// Filter state
+export async function saveFilterState(isActive: boolean): Promise<void> {
+  return new Promise((resolve) => {
+    chrome.storage.local.set({ hearly_filter: { isActive } }, resolve)
+  })
+}
+
+export async function loadFilterState(): Promise<{ isActive: boolean } | null> {
+  return new Promise((resolve) => {
+    chrome.storage.local.get('hearly_filter', (result) => {
+      resolve((result.hearly_filter as { isActive: boolean } | undefined) ?? null)
+    })
+  })
+}
+
+// Transcript state
+export async function saveTranscriptState(isEnabled: boolean): Promise<void> {
+  return new Promise((resolve) => {
+    chrome.storage.local.set({ hearly_transcript: { isEnabled } }, resolve)
+  })
+}
+
+export async function loadTranscriptState(): Promise<{ isEnabled: boolean } | null> {
+  return new Promise((resolve) => {
+    chrome.storage.local.get('hearly_transcript', (result) => {
+      resolve((result.hearly_transcript as { isEnabled: boolean } | undefined) ?? null)
+    })
+  })
+}

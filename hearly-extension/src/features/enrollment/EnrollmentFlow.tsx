@@ -4,6 +4,7 @@ import { HearlyLogoMark } from '@/ui/shared/HearlyLogoMark';
 import { Phase1_Intro } from './Phase1_Intro';
 import { Phase2_Record } from './Phase2_Record';
 import { Phase3_Done } from './Phase3_Done';
+import { saveEnrollmentState } from '../../services/storageService';
 
 /** Must match extension popup shell; avoid fixed positioning inside MV3 popup documents. */
 const POPUP_W = 'w-[380px]';
@@ -164,11 +165,13 @@ export function EnrollmentFlow({ onClose, onComplete }: EnrollmentFlowProps) {
               <div className="mt-6">
                 <Phase3_Done />
               </div>
+
               <Button
                 variant="secondary"
                 className={`mt-6 w-full ${primaryButtonClass}`}
                 onClick={() => {
                   onComplete(name);
+                  saveEnrollmentState({ isEnrolled: true, userName: name });
                 }}
               >
                 Start Using Hearly
