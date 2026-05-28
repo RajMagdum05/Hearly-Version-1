@@ -3,7 +3,17 @@
   "version": "1.0.0",
   "description": "AI-powered voice focus tool for meetings",
   "manifest_version": 3,
+  "icons": {
+    "16": "icons/icon-16.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
   "action": {
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "48": "icons/icon-48.png",
+      "128": "icons/icon-128.png"
+    },
     "default_popup": "index.html"
   },
   "background": {
@@ -18,7 +28,7 @@
       "js": [
         "content-meet.js"
       ],
-      "run_at": "document_idle"
+      "run_at": "document_start"
     },
     {
       "matches": [
@@ -28,7 +38,7 @@
       "js": [
         "content-zoom.js"
       ],
-      "run_at": "document_idle"
+      "run_at": "document_start"
     },
     {
       "matches": [
@@ -38,7 +48,21 @@
       "js": [
         "content-teams.js"
       ],
-      "run_at": "document_idle"
+      "run_at": "document_start"
+    },
+    {
+      "matches": [
+        "https://meet.google.com/*",
+        "https://zoom.us/*",
+        "https://app.zoom.us/*",
+        "https://teams.microsoft.com/*",
+        "https://teams.live.com/*"
+      ],
+      "js": [
+        "injected-mic.js"
+      ],
+      "world": "MAIN",
+      "run_at": "document_start"
     }
   ],
   "permissions": [
@@ -53,6 +77,22 @@
     "https://zoom.us/*",
     "https://app.zoom.us/*",
     "https://teams.microsoft.com/*",
-    "https://teams.live.com/*"
+    "https://teams.live.com/*",
+    "http://localhost:8787/*"
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "injected-mic.js",
+        "hearly-processor.js"
+      ],
+      "matches": [
+        "https://meet.google.com/*",
+        "https://zoom.us/*",
+        "https://app.zoom.us/*",
+        "https://teams.microsoft.com/*",
+        "https://teams.live.com/*"
+      ]
+    }
   ]
 }

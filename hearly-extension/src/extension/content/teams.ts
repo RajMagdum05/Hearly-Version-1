@@ -1,4 +1,85 @@
 import { HearlyMessage } from '../messages'
+import { StreamingRecorder } from '../../audio/streamingRecorder'
+
+type EnrollmentStorageResult = {
+  hearly_enrollment?: {
+    isEnrolled?: boolean
+  }
+  hearly_filter?: {
+    isActive?: boolean
+  }
+  hearly_voice_profile?: {
+    embedding?: number[]
+  }
+  hearly_transcript?: {
+    isEnabled?: boolean
+  }
+}
+
+const PLATFORM = 'teams'
+
+function installMicBridge() {
+  window.addEventListener('message', (event) => {
+    if (event.source !== window) return
+    const data = event.data as {
+      source?: string
+      type?: string
+      requestId?: string
+      platform?: string
+      score?: number
+      matched?: boolean
+      error?: string
+      audioBase64?: string
+      timestamp?: number
+    }
+    if (data?.source !== 'hearly-page') return
+
+    if (data.type === 'GET_MIC_STATE' && data.requestId) {
+      chrome.storage.local.get(['hearly_filter', 'hearly_voice_profile', 'hearly_transcript'], (result: EnrollmentStorageResult) => {
+        window.postMessage({
+          source: 'hearly-content',
+          type: 'MIC_STATE',
+          requestId: data.requestId,
+          enabled: result.hearly_filter?.isActive === true,
+          embedding: result.hearly_voice_profile?.embedding ?? null,
+          threshold: 0.58,
+          workletUrl: chrome.runtime.getURL('hearly-processor.js'),
+          transcriptionEnabled: result.hearly_transcript?.isEnabled === true,
+        }, window.location.origin)
+      })
+      return
+    }
+
+    if (data.type === 'NEW_MIC_CHUNK' && data.audioBase64) {
+      chrome.runtime.sendMessage({
+        type: 'HEARLY_TRANSCRIBE_CHUNK',
+        audioBase64: data.audioBase64,
+        speaker: 'you',
+        timestamp: data.timestamp ?? Date.now(),
+      })
+      return
+    }
+
+    const map: Record<string, HearlyMessage['type']> = {
+      MIC_PROCESSING_STARTED: 'HEARLY_MIC_PROCESSING_STARTED',
+      MIC_PROCESSING_STOPPED: 'HEARLY_MIC_PROCESSING_STOPPED',
+      MIC_PROCESSING_ERROR: 'HEARLY_MIC_PROCESSING_ERROR',
+      VOICE_MATCH: 'HEARLY_VOICE_MATCH',
+    }
+    const type = data.type ? map[data.type] : undefined
+    if (type) {
+      chrome.runtime.sendMessage({
+        type,
+        platform: data.platform ?? PLATFORM,
+        score: data.score,
+        matched: data.matched,
+        error: data.error,
+      } as HearlyMessage)
+    }
+  })
+}
+
+installMicBridge()
 
 // ─── Meeting Detection ─────────────────────────────────────────────────────
 
@@ -40,7 +121,7 @@ function sendMeetingEnded() {
 function injectHearlyBanner(): void {
   if (document.getElementById('hearly-banner')) return
 
-  chrome.storage.local.get('hearly_enrollment', (result) => {
+  chrome.storage.local.get('hearly_enrollment', (result: EnrollmentStorageResult) => {
     const isEnrolled = result?.hearly_enrollment?.isEnrolled === true
 
     const banner = document.createElement('div')
@@ -257,8 +338,36 @@ init()
 let audioContext: AudioContext | null = null
 let mediaStream: MediaStream | null = null
 let sourceNode: MediaStreamAudioSourceNode | null = null
+let streamingRecorder: StreamingRecorder | null = null
+
+function startTranscriptionRecorder(stream: MediaStream) {
+  if (streamingRecorder) return
+  console.log('[Hearly] Starting transcription recorder...')
+  chrome.storage.local.get('hearly_app_settings', (settingsResult: any) => {
+    const language = settingsResult.hearly_app_settings?.language ?? 'en'
+    streamingRecorder = new StreamingRecorder(stream, 'others', (chunkBase64, timestamp) => {
+      chrome.runtime.sendMessage({
+        type: 'HEARLY_TRANSCRIBE_CHUNK',
+        audioBase64: chunkBase64,
+        language,
+        speaker: 'others',
+        timestamp,
+      })
+    })
+    streamingRecorder.start()
+  })
+}
+
+function stopTranscriptionRecorder() {
+  if (streamingRecorder) {
+    streamingRecorder.stop()
+    streamingRecorder = null
+  }
+  console.log('[Hearly] Transcription recorder stopped')
+}
 
 function stopMeetingAudioCapture(): void {
+  stopTranscriptionRecorder()
   if (sourceNode) { sourceNode.disconnect(); sourceNode = null }
   if (audioContext) { audioContext.close(); audioContext = null }
   if (mediaStream) { mediaStream.getTracks().forEach(t => t.stop()); mediaStream = null }
@@ -266,7 +375,12 @@ function stopMeetingAudioCapture(): void {
   chrome.runtime.sendMessage({ type: 'HEARLY_AUDIO_STOPPED', platform: 'teams' })
 }
 
-chrome.runtime.onMessage.addListener((message) => {
+chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  if (message.type === 'HEARBEAT_PING') {
+    sendResponse({ status: 'pong' })
+    return true
+  }
+
   if (message.type === 'HEARLY_START_AUDIO' && message.streamId) {
     navigator.mediaDevices.getUserMedia({
       audio: {
@@ -279,9 +393,27 @@ chrome.runtime.onMessage.addListener((message) => {
     }).then((stream) => {
       mediaStream = stream
       audioContext = new AudioContext({ sampleRate: 16000 })
+
+      // Handle browser Autoplay policy
+      if (audioContext.state === 'suspended') {
+        const resume = () => {
+          audioContext?.resume();
+          window.removeEventListener('click', resume);
+        };
+        window.addEventListener('click', resume);
+      }
+
       sourceNode = audioContext.createMediaStreamSource(stream)
+      sourceNode.connect(audioContext.destination)
       console.log('[Hearly] Audio capture started on Teams page (tabCapture)')
       chrome.runtime.sendMessage({ type: 'HEARLY_AUDIO_STARTED', platform: 'teams' })
+
+      // Check if transcription is enabled
+      chrome.storage.local.get('hearly_transcript', (result: EnrollmentStorageResult) => {
+        if (result.hearly_transcript?.isEnabled) {
+          startTranscriptionRecorder(stream)
+        }
+      })
     }).catch((err) => {
       console.warn('[Hearly] Teams tabCapture stream failed:', err)
       chrome.runtime.sendMessage({ type: 'HEARLY_AUDIO_ERROR', error: String(err) })
@@ -290,5 +422,36 @@ chrome.runtime.onMessage.addListener((message) => {
 
   if (message.type === 'HEARLY_STOP_AUDIO') {
     stopMeetingAudioCapture()
+  }
+
+  if (message.type === 'HEARLY_FILTER_STATE_CHANGED') {
+    chrome.storage.local.get('hearly_filter', (result: EnrollmentStorageResult) => {
+      window.postMessage({
+        source: 'hearly-content',
+        type: 'FILTER_STATE_CHANGED',
+        active: result.hearly_filter?.isActive === true,
+      }, window.location.origin)
+    })
+  }
+
+  if (message.type === 'HEARLY_TRANSCRIPT_STATE_CHANGED') {
+    chrome.storage.local.get('hearly_transcript', (result: EnrollmentStorageResult) => {
+      const isEnabled = result.hearly_transcript?.isEnabled === true
+
+      // Notify the page context
+      window.postMessage({
+        source: 'hearly-content',
+        type: 'TRANSCRIPT_STATE_CHANGED',
+        enabled: isEnabled,
+      }, window.location.origin);
+
+      if (isEnabled) {
+        if (mediaStream && !streamingRecorder) {
+          startTranscriptionRecorder(mediaStream)
+        }
+      } else {
+        stopTranscriptionRecorder()
+      }
+    })
   }
 })

@@ -15,7 +15,7 @@ export function AudioWaveform({ analyser, isActive }: Props) {
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    if (!isActive || !analyser) {
+    if (!isActive) {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       // Draw flat line when inactive
       ctx.beginPath();
@@ -25,6 +25,34 @@ export function AudioWaveform({ analyser, isActive }: Props) {
       ctx.lineTo(canvas.width, canvas.height / 2);
       ctx.stroke();
       return;
+    }
+
+    if (!analyser) {
+      const barCount = 28;
+      const barWidth = 4;
+      const gap = (canvas.width - barCount * barWidth) / (barCount - 1);
+
+      const drawFallback = (time = 0) => {
+        rafRef.current = requestAnimationFrame(drawFallback);
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.fillStyle = '#B5F03D';
+
+        for (let i = 0; i < barCount; i++) {
+          const wave = Math.sin(time / 180 + i * 0.55);
+          const height = 8 + Math.abs(wave) * 24;
+          const x = i * (barWidth + gap);
+          const y = (canvas.height - height) / 2;
+          ctx.globalAlpha = 0.35 + Math.abs(wave) * 0.55;
+          ctx.beginPath();
+          ctx.roundRect(x, y, barWidth, height, barWidth / 2);
+          ctx.fill();
+        }
+
+        ctx.globalAlpha = 1;
+      };
+
+      drawFallback();
+      return () => cancelAnimationFrame(rafRef.current);
     }
 
     const bufferLength = analyser.frequencyBinCount;

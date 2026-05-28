@@ -1,0 +1,10 @@
+node_modules/
+dist/
+.env
+*.zip
+.DS_Store
+hearly-extension/node_modules/
+hearly-extension/dist/
+hearly-extension/.env
+hearly-cloud-server/node_modules/
+hearly-cloud-server/.env

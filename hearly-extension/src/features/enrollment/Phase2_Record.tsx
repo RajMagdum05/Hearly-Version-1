@@ -1,4 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import {
+  averageFingerprints,
+  extractVoiceFingerprintFromBlob,
+} from '@/audio/voiceFingerprint';
 import { IconCheck, IconMic } from '@/ui/shared/icons';
 
 type SpeechRecognitionResultLike = {
@@ -40,11 +44,10 @@ export interface Phase2_RecordProps {
   isRecording: boolean;
   hasRecording: boolean;
   onToggleRecord: () => void;
-  onTrainingComplete: () => void;
+  onTrainingComplete: (embedding: Float32Array, phraseAudio: Blob[]) => void;
 }
 
 const WAVE_HEIGHTS = [14, 18, 13, 22, 16, 28, 18, 34, 20, 30, 17, 26, 15, 22, 13, 18] as const;
-const PREVIEW_WORD_INTERVAL_MS = 420;
 
 function normalizeWords(value: string) {
   return value
@@ -59,13 +62,54 @@ function getMatchedWordCount(targetWords: readonly string[], spokenText: string)
   let matched = 0;
 
   for (const spokenWord of spokenWords) {
-    if (spokenWord === targetWords[matched]) {
+    if (matched >= targetWords.length) break;
+
+    const target = targetWords[matched];
+
+    if (spokenWord === target) {
       matched += 1;
+      continue;
     }
 
-    if (matched === targetWords.length) {
-      break;
+    // Fuzzy match for "hearly" which speech recognition often misinterprets
+    if (target === 'hearly') {
+      if (
+        spokenWord.includes('earl') ||
+        spokenWord.includes('harl') ||
+        spokenWord.endsWith('ly') ||
+        spokenWord.startsWith('h')
+      ) {
+        matched += 1;
+        continue;
+      }
     }
+
+    // Allow partial matches for longer words (like unusual names)
+    if (target.length >= 4 && spokenWord.length >= 4) {
+      if (
+        target.includes(spokenWord) ||
+        spokenWord.includes(target) ||
+        target.slice(0, 3) === spokenWord.slice(0, 3)
+      ) {
+        matched += 1;
+        continue;
+      }
+    }
+
+    // Lookahead to allow skipping up to 2 misrecognized words
+    if (matched + 1 < targetWords.length && spokenWord === targetWords[matched + 1]) {
+      matched += 2;
+      continue;
+    }
+    if (matched + 2 < targetWords.length && spokenWord === targetWords[matched + 2]) {
+      matched += 3;
+      continue;
+    }
+  }
+
+  // If they are stuck on the very last word but have said enough words, autocomplete
+  if (matched === targetWords.length - 1 && spokenWords.length >= targetWords.length) {
+    matched += 1;
   }
 
   return matched;
@@ -77,6 +121,10 @@ function stopRecognition(recognition: SpeechRecognitionLike) {
   } catch {
     // Chrome can throw if recognition has already ended.
   }
+}
+
+function stopTracks(stream: MediaStream | null) {
+  stream?.getTracks().forEach((track) => track.stop());
 }
 
 function buildPhrases(displayName: string) {
@@ -145,8 +193,15 @@ export function Phase2_Record({
   const [activeWord, setActiveWord] = useState(0);
   const [phraseReadyNext, setPhraseReadyNext] = useState(false);
   const [speechSupported, setSpeechSupported] = useState(true);
+  const [recordingError, setRecordingError] = useState<string | null>(null);
+  const [isProcessingPhrase, setIsProcessingPhrase] = useState(false);
   const completeNotifiedRef = useRef(false);
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const mediaStreamRef = useRef<MediaStream | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const phraseAudioRef = useRef<Blob[]>([]);
+  const fingerprintsRef = useRef<Float32Array[]>([]);
 
   const completedWordsBeforeActive = phraseWords
     .slice(0, activePhrase)
@@ -157,12 +212,14 @@ export function Phase2_Record({
   const progress = Math.min(100, Math.round((trainedWords / totalWords) * 100));
   const status = hasRecording
     ? 'All phrases captured'
+    : isProcessingPhrase
+      ? 'Building voice print'
     : isRecording
       ? 'Listening to your voice'
       : phraseReadyNext
         ? 'Phrase captured'
         : !speechSupported
-          ? 'Preview training ready'
+          ? 'Speech recognition unavailable'
       : 'Ready to record';
   const activePhraseComplete =
     hasRecording || activeWord >= phraseWords[activePhrase].length;
@@ -173,9 +230,123 @@ export function Phase2_Record({
       if (!phraseReadyNext) {
         setActiveWord(0);
       }
+      setRecordingError(null);
       completeNotifiedRef.current = false;
     }
   }, [isRecording, hasRecording, phraseReadyNext]);
+
+  useEffect(() => {
+    if (!isRecording || hasRecording || phraseReadyNext) {
+      return;
+    }
+
+    let cancelled = false;
+
+    async function startCapture() {
+      if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
+        setRecordingError('Microphone recording is not available in this browser.');
+        onToggleRecord();
+        return;
+      }
+
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+          },
+          video: false,
+        });
+
+        if (cancelled) {
+          stopTracks(stream);
+          return;
+        }
+
+        audioChunksRef.current = [];
+        mediaStreamRef.current = stream;
+        const recorder = new MediaRecorder(stream);
+        mediaRecorderRef.current = recorder;
+        recorder.ondataavailable = (event) => {
+          if (event.data.size > 0) {
+            audioChunksRef.current.push(event.data);
+          }
+        };
+        recorder.start();
+      } catch {
+        setRecordingError('Microphone permission is needed to train your voice.');
+        onToggleRecord();
+      }
+    }
+
+    void startCapture();
+
+    return () => {
+      cancelled = true;
+      const recorder = mediaRecorderRef.current;
+      if (recorder?.state === 'recording') {
+        recorder.stop();
+      }
+      stopTracks(mediaStreamRef.current);
+      mediaRecorderRef.current = null;
+      mediaStreamRef.current = null;
+    };
+  }, [hasRecording, isRecording, onToggleRecord, phraseReadyNext]);
+
+  const finishPhraseCapture = async () => {
+    const recorder = mediaRecorderRef.current;
+    const stream = mediaStreamRef.current;
+
+    if (!recorder || recorder.state === 'inactive') {
+      return null;
+    }
+
+    setIsProcessingPhrase(true);
+
+    const blob = await new Promise<Blob>((resolve) => {
+      recorder.onstop = () => {
+        const type = audioChunksRef.current[0]?.type || 'audio/webm';
+        resolve(new Blob(audioChunksRef.current, { type }));
+      };
+      recorder.stop();
+    });
+
+    stopTracks(stream);
+    mediaRecorderRef.current = null;
+    mediaStreamRef.current = null;
+
+    try {
+      const fingerprint = await extractVoiceFingerprintFromBlob(blob);
+      phraseAudioRef.current.push(blob);
+      fingerprintsRef.current.push(fingerprint);
+      return fingerprint;
+    } catch {
+      setRecordingError('Could not read that voice sample. Please try again.');
+      return null;
+    } finally {
+      setIsProcessingPhrase(false);
+    }
+  };
+
+  const completePhrase = async () => {
+    const fingerprint = await finishPhraseCapture();
+    if (!fingerprint) {
+      onToggleRecord();
+      return;
+    }
+
+    if (isFinalPhrase && !completeNotifiedRef.current) {
+      completeNotifiedRef.current = true;
+      onTrainingComplete(
+        averageFingerprints(fingerprintsRef.current),
+        [...phraseAudioRef.current],
+      );
+      return;
+    }
+
+    onToggleRecord();
+  };
 
   useEffect(() => {
     if (!isRecording || hasRecording || phraseReadyNext) {
@@ -191,6 +362,8 @@ export function Phase2_Record({
 
     if (!RecognitionConstructor) {
       setSpeechSupported(false);
+      setRecordingError('Chrome speech recognition is needed for phrase-by-phrase training.');
+      onToggleRecord();
       return;
     }
 
@@ -228,19 +401,19 @@ export function Phase2_Record({
           setPhraseReadyNext(true);
           stopRecognition(recognition);
 
-          if (isFinalPhrase && !completeNotifiedRef.current) {
-            completeNotifiedRef.current = true;
-            onTrainingComplete();
-            return;
-          }
-
-          onToggleRecord();
+          void completePhrase();
         }
       };
 
-      recognition.onerror = () => {
+      recognition.onerror = (event) => {
         setSpeechSupported(false);
+        setRecordingError(
+          event?.error === 'not-allowed'
+            ? 'Speech recognition permission is needed to train your voice.'
+            : 'Speech recognition could not hear the phrase. Please try again.',
+        );
         stopRecognition(recognition);
+        onToggleRecord();
       };
 
       recognition.onend = () => {
@@ -283,45 +456,6 @@ export function Phase2_Record({
   ]);
 
   useEffect(() => {
-    if (!isRecording || hasRecording || phraseReadyNext || speechSupported) {
-      return;
-    }
-
-    const timer = window.setInterval(() => {
-      setActiveWord((wordIndex) => {
-        const wordsInPhrase = phraseWords[activePhrase].length;
-
-        if (wordIndex + 1 < wordsInPhrase) {
-          return wordIndex + 1;
-        }
-
-        setPhraseReadyNext(true);
-
-        if (isFinalPhrase && !completeNotifiedRef.current) {
-          completeNotifiedRef.current = true;
-          onTrainingComplete();
-        } else {
-          onToggleRecord();
-        }
-
-        return wordsInPhrase;
-      });
-    }, PREVIEW_WORD_INTERVAL_MS);
-
-    return () => window.clearInterval(timer);
-  }, [
-    activePhrase,
-    hasRecording,
-    isFinalPhrase,
-    isRecording,
-    onToggleRecord,
-    onTrainingComplete,
-    phraseReadyNext,
-    phraseWords,
-    speechSupported,
-  ]);
-
-  useEffect(() => {
     if (hasRecording) {
       setActivePhrase(phrases.length - 1);
       setActiveWord(phraseWords[phrases.length - 1].length);
@@ -336,6 +470,8 @@ export function Phase2_Record({
       setActivePhrase(0);
       setActiveWord(0);
       setPhraseReadyNext(false);
+      fingerprintsRef.current = [];
+      phraseAudioRef.current = [];
     }
 
     onToggleRecord();
@@ -380,6 +516,29 @@ export function Phase2_Record({
         <div className="mt-4">
           <RecordingWaveform active={isRecording} complete={hasRecording} />
         </div>
+
+        {recordingError ? (
+          <div className="mt-3 text-left">
+            <p className="text-[11px] font-medium leading-relaxed text-hearly-danger">
+              {recordingError}
+            </p>
+            {recordingError.toLowerCase().includes('permission') && (
+              <button
+                type="button"
+                onClick={() => {
+                  if (typeof chrome !== 'undefined' && chrome.tabs) {
+                    chrome.tabs.create({ url: chrome.runtime.getURL('index.html') });
+                  } else {
+                    window.open(window.location.href, '_blank');
+                  }
+                }}
+                className="mt-2 text-[11px] font-semibold text-hearly-accent hover:underline"
+              >
+                Open in a new tab to grant permissions
+              </button>
+            )}
+          </div>
+        ) : null}
 
         <div className="mt-4 rounded-2xl border border-white/[0.06] bg-black/25 px-3.5 py-3 text-left">
           <div className="flex items-center justify-between gap-3">
@@ -461,6 +620,7 @@ export function Phase2_Record({
         <button
           type="button"
           onClick={handlePrimaryRecordAction}
+          disabled={isProcessingPhrase}
           className={`mx-auto flex h-[66px] w-[66px] items-center justify-center rounded-full border transition-[border-color,background-color,color,box-shadow,transform] duration-300 ease-out active:scale-[0.98] ${
             isRecording
               ? 'border-hearly-accent/60 bg-hearly-accent/[0.08] text-white shadow-[0_0_30px_rgba(181,240,61,0.16)]'
@@ -472,10 +632,12 @@ export function Phase2_Record({
         </button>
       )}
       <p className="text-[12px] font-medium text-hearly-secondary">
-        {isRecording
+        {isProcessingPhrase
+          ? 'Saving this phrase to your voice profile'
+          : isRecording
           ? speechSupported
             ? 'Read the highlighted phrase aloud'
-            : 'Previewing the training flow'
+            : 'Speech recognition is unavailable'
           : hasRecording
             ? 'Retake phrases'
             : phraseReadyNext

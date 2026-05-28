@@ -13,9 +13,16 @@ export type MessageType =
   | 'HEARLY_AUDIO_STARTED'
   | 'HEARLY_AUDIO_STOPPED'
   | 'HEARLY_AUDIO_ERROR'
+  | 'HEARLY_VOICE_MATCH'
+  | 'HEARLY_MIC_PROCESSING_STARTED'
+  | 'HEARLY_MIC_PROCESSING_STOPPED'
+  | 'HEARLY_MIC_PROCESSING_ERROR'
   | 'MIC_PERMISSION_GRANTED'
   | 'MIC_PERMISSION_DENIED'
   | 'REQUEST_MIC_PERMISSION'
+  | 'HEARLY_TRANSCRIBE_CHUNK'
+  | 'HEARLY_NEW_TRANSCRIPT_ENTRY'
+  | 'HEARLY_TRANSCRIPT_STATE_CHANGED'
 
 export interface HearlyMessage {
   type: MessageType
@@ -23,6 +30,8 @@ export interface HearlyMessage {
   streamId?: string
   platform?: string
   error?: string
+  score?: number
+  matched?: boolean
 }
 
 export type Platform = 'meet' | 'zoom' | 'teams' | 'unknown'

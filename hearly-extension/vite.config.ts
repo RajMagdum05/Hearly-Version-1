@@ -20,6 +20,8 @@ export default defineConfig({
         'content-meet': resolve(__dirname, 'src/extension/content/meet.ts'),
         'content-zoom': resolve(__dirname, 'src/extension/content/zoom.ts'),
         'content-teams': resolve(__dirname, 'src/extension/content/teams.ts'),
+        'injected-mic': resolve(__dirname, 'src/extension/injected-mic.ts'),
+        'hearly-processor': resolve(__dirname, 'src/extension/hearly-processor.ts'),
       },
       output: {
         entryFileNames: '[name].js',

@@ -1,5 +1,6 @@
 export interface VoiceProfile {
   id: string;
+  cloudProfileId?: string;
   userName: string;
   email?: string;
   embedding: Float32Array;
