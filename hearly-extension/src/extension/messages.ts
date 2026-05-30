@@ -14,6 +14,7 @@ export type MessageType =
   | 'HEARLY_AUDIO_STOPPED'
   | 'HEARLY_AUDIO_ERROR'
   | 'HEARLY_VOICE_MATCH'
+  | 'HEARLY_VOICE_ACTIVITY'
   | 'HEARLY_MIC_PROCESSING_STARTED'
   | 'HEARLY_MIC_PROCESSING_STOPPED'
   | 'HEARLY_MIC_PROCESSING_ERROR'
@@ -21,6 +22,8 @@ export type MessageType =
   | 'MIC_PERMISSION_DENIED'
   | 'REQUEST_MIC_PERMISSION'
   | 'HEARLY_TRANSCRIBE_CHUNK'
+  | 'HEARLY_VERIFY_VOICE_WINDOW'
+  | 'HEARLY_MODEL_UNAVAILABLE'
   | 'HEARLY_NEW_TRANSCRIPT_ENTRY'
   | 'HEARLY_TRANSCRIPT_STATE_CHANGED'
 
@@ -32,6 +35,15 @@ export interface HearlyMessage {
   error?: string
   score?: number
   matched?: boolean
+  isSpeech?: boolean
+  confidence?: number
+  rms?: number
+  noiseFloor?: number
+  samples?: number[]
+  sampleRate?: number
+  threshold?: number
+  vadConfidence?: number
+  unavailable?: boolean
 }
 
 export type Platform = 'meet' | 'zoom' | 'teams' | 'unknown'

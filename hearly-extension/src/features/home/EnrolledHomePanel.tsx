@@ -10,6 +10,8 @@ export interface EnrolledHomePanelProps {
   audioError?: string | null;
   voiceScore?: number | null;
   voiceMatched?: boolean | null;
+  speechActive?: boolean | null;
+  speechConfidence?: number | null;
 }
 
 /**
@@ -24,6 +26,8 @@ export function EnrolledHomePanel({
   audioError,
   voiceScore,
   voiceMatched,
+  speechActive,
+  speechConfidence,
 }: EnrolledHomePanelProps) {
   const platformName =
     audioPlatform && audioPlatform !== 'unknown'
@@ -43,17 +47,33 @@ export function EnrolledHomePanel({
             <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-hearly-tertiary">
               Hearly active on {platformName}
             </p>
-            {typeof voiceScore === 'number' ? (
-              <span
-                className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${
-                  voiceMatched
-                    ? 'border-hearly-accent/30 bg-hearly-accent/[0.08] text-hearly-accent'
-                    : 'border-white/[0.08] bg-white/[0.03] text-hearly-secondary'
-                }`}
-              >
-                {Math.round(voiceScore * 100)}%
-              </span>
-            ) : null}
+            <div className="flex shrink-0 items-center gap-1.5">
+              {typeof speechActive === 'boolean' ? (
+                <span
+                  className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${
+                    speechActive
+                      ? 'border-hearly-accent/30 bg-hearly-accent/[0.08] text-hearly-accent'
+                      : 'border-white/[0.08] bg-white/[0.03] text-hearly-secondary'
+                  }`}
+                >
+                  {speechActive ? 'Speech' : 'Quiet'}
+                  {typeof speechConfidence === 'number'
+                    ? ` ${Math.round(speechConfidence * 100)}%`
+                    : ''}
+                </span>
+              ) : null}
+              {typeof voiceScore === 'number' ? (
+                <span
+                  className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${
+                    voiceMatched
+                      ? 'border-hearly-accent/30 bg-hearly-accent/[0.08] text-hearly-accent'
+                      : 'border-white/[0.08] bg-white/[0.03] text-hearly-secondary'
+                  }`}
+                >
+                  {Math.round(voiceScore * 100)}%
+                </span>
+              ) : null}
+            </div>
           </div>
           <AudioWaveform analyser={analyser} isActive={capturing} />
         </div>

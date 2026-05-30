@@ -4,6 +4,7 @@ export interface VoiceProfile {
   userName: string;
   email?: string;
   embedding: Float32Array;
+  embeddingModel: 'fallback' | 'onnx-ready';
   enrolledAt: number;
   isActive: boolean;
 }

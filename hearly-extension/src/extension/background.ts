@@ -1,8 +1,9 @@
 import { HearlyMessage, MeetingStatus, Platform } from './messages';
-import { transcribeAudioInCloud } from '../services/cloudService';
-import type { TranscriptEntry } from '../utils/types';
-import { TranscriptMerger } from '../audio/transcriptMerger';
-import { loadTranscriptEntries, saveTranscriptEntries } from '../services/storageService';
+import { compareSpeakerEmbeddings, embedPcmWindowWithOnnx } from '@/ai/localSpeakerModel';
+import { transcribePcmWithOnnx } from '@/ai/localSttModel';
+import type { TranscriptEntry } from '@/utils/types';
+import { TranscriptMerger } from '@/audio/transcriptMerger';
+import { loadTranscriptEntries, saveTranscriptEntries } from '@/services/storageService';
 
 let meetingStatus: MeetingStatus = {
   isInMeeting: false,
@@ -11,12 +12,20 @@ let meetingStatus: MeetingStatus = {
 };
 
 let currentSessionId = crypto.randomUUID();
-
 const youMerger = new TranscriptMerger();
 const othersMerger = new TranscriptMerger();
+let sttUnavailableNotified = false;
 
-let lastAssistantCallTime = 0;
-let assistantCalling = false;
+type RuntimeVoiceProfile = {
+  embedding?: number[];
+  embeddingModel?: 'fallback' | 'onnx-ready';
+};
+
+function safeSendTabMessage(tabId: number, message: Record<string, unknown>) {
+  chrome.tabs.sendMessage(tabId, message, () => {
+    void chrome.runtime.lastError;
+  });
+}
 
 // ─── Heartbeat Watchdog & Observability ──────────────────────────────────
 class BackgroundWatchdog {
@@ -47,9 +56,10 @@ class BackgroundWatchdog {
   private static reconnectPipeline(tabId: number) {
     console.log('[Hearly Watchdog] Initiating audio pipeline reconnect...');
     chrome.tabs.sendMessage(tabId, { type: 'HEARLY_STOP_AUDIO' }, () => {
+      if (chrome.runtime.lastError) return;
       chrome.tabCapture.getMediaStreamId({ consumerTabId: tabId }, (streamId) => {
         if (chrome.runtime.lastError || !streamId) return;
-        chrome.tabs.sendMessage(tabId, { type: 'HEARLY_START_AUDIO', streamId });
+        safeSendTabMessage(tabId, { type: 'HEARLY_START_AUDIO', streamId });
       });
     });
   }
@@ -59,60 +69,6 @@ class BackgroundWatchdog {
     this.heartbeatTimer = null;
     this.keepAliveTabId = null;
   }
-}
-
-// ─── AI Assistant Sliding Context Window ──────────────────────────────────
-function getContextForLLM(entries: TranscriptEntry[]): string {
-  let contextStr = "";
-  let estimatedTokens = 0;
-  const maxTokens = 1500;
-  
-  for (let i = entries.length - 1; i >= 0; i--) {
-    const entry = entries[i];
-    if (!entry) continue;
-    const line = `[${new Date(entry.timestamp).toLocaleTimeString()}] ${entry.speaker === 'you' ? 'You' : 'Others'}: ${entry.text}\n`;
-    const lineTokens = Math.ceil(line.length / 4);
-    
-    if (estimatedTokens + lineTokens > maxTokens) {
-      break;
-    }
-    
-    contextStr = line + contextStr;
-    estimatedTokens += lineTokens;
-  }
-  return contextStr;
-}
-
-function triggerAssistantInsights(entries: TranscriptEntry[]) {
-  const now = Date.now();
-  if (now - lastAssistantCallTime < 15000 || assistantCalling) return;
-  
-  assistantCalling = true;
-  lastAssistantCallTime = now;
-  
-  const context = getContextForLLM(entries);
-  const formData = new FormData();
-  formData.append('context', context);
-  
-  fetch('http://localhost:8787/api/assistant', {
-    method: 'POST',
-    body: formData,
-  })
-    .then(res => res.json())
-    .then((data: any) => {
-      if (data.suggestion) {
-        chrome.storage.local.set({ hearly_assistant_suggestion: data.suggestion }, () => {
-          chrome.runtime.sendMessage({
-            type: 'HEARLY_ASSISTANT_SUGGESTION',
-            suggestion: data.suggestion,
-          });
-        });
-      }
-    })
-    .catch(err => console.error('[Hearly Assistant] Call failed:', err))
-    .finally(() => {
-      assistantCalling = false;
-    });
 }
 
 function handleInstalled() {
@@ -130,6 +86,7 @@ function handleMessage(message: HearlyMessage, _sender: chrome.runtime.MessageSe
   if (message.type === 'MEETING_ENDED') {
     meetingStatus = { isInMeeting: false, platform: 'unknown', isActive: false };
     currentSessionId = crypto.randomUUID();
+    sttUnavailableNotified = false;
     BackgroundWatchdog.unregister();
   }
   
@@ -205,58 +162,98 @@ function handleMessage(message: HearlyMessage, _sender: chrome.runtime.MessageSe
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
       const tab = tabs[0];
       if (tab?.id) {
-        chrome.tabs.sendMessage(tab.id, { type: 'HEARLY_STOP_AUDIO' });
+        safeSendTabMessage(tab.id, { type: 'HEARLY_STOP_AUDIO' });
       }
     });
     BackgroundWatchdog.unregister();
   }
 
-  if (message.type === 'HEARLY_TRANSCRIBE_CHUNK' && (message as any).audioBase64) {
-    const audioBase64 = (message as any).audioBase64;
-    const language = (message as any).language ?? 'en';
-    const speaker = (message as any).speaker ?? 'others';
+  if (message.type === 'HEARLY_TRANSCRIBE_CHUNK') {
+    const samples = message.samples;
+    const sampleRate = message.sampleRate ?? 16000;
+    const language = ((message as any).language ?? 'en') as 'en' | 'hi' | 'mr';
+    const speaker = ((message as any).speaker ?? 'others') as 'you' | 'others';
     const timestamp = (message as any).timestamp ?? Date.now();
-
-    const binaryString = atob(audioBase64);
-    const len = binaryString.length;
-    const bytes = new Uint8Array(len);
-    for (let i = 0; i < len; i++) {
-      bytes[i] = binaryString.charCodeAt(i);
+    if (!Array.isArray(samples) || samples.length === 0) {
+      return;
     }
-    const audioBlob = new Blob([bytes], { type: 'audio/webm' });
 
-    transcribeAudioInCloud({ audio: audioBlob, language })
-      .then((result) => {
-        if (result && result.text && result.text.trim()) {
-          const merger = speaker === 'you' ? youMerger : othersMerger;
-          const novelText = merger.merge(result.text);
-
-          if (novelText && novelText.trim()) {
-            const entry: TranscriptEntry = {
-              id: `msg-${crypto.randomUUID()}`,
-              speaker: speaker as any,
-              text: novelText.trim(),
-              language: (result.language || language) as any,
-              timestamp,
-              sessionId: `session-${currentSessionId}`
-            };
-
-            loadTranscriptEntries().then((list) => {
-              list.push(entry);
-              saveTranscriptEntries(list).then(() => {
-                chrome.runtime.sendMessage({
-                  type: 'HEARLY_NEW_TRANSCRIPT_ENTRY',
-                  entry
-                });
-                triggerAssistantInsights(list);
-              });
-            });
-          }
+    void (async () => {
+      const result = await transcribePcmWithOnnx(new Float32Array(samples), sampleRate);
+      if (result.unavailable) {
+        if (!sttUnavailableNotified) {
+          sttUnavailableNotified = true;
+          chrome.runtime.sendMessage({
+            type: 'HEARLY_MIC_PROCESSING_ERROR',
+            error: 'Local STT model unavailable. Export hearly-stt-wav2vec2.onnx and hearly-stt-vocab.json, then reload extension.',
+          } as HearlyMessage);
         }
-      })
-      .catch((err) => {
-        console.error('[Hearly] Transcription failed:', err);
+        return;
+      }
+
+      sttUnavailableNotified = false;
+      const trimmed = result.text.trim();
+      if (!trimmed) return;
+
+      const merger = speaker === 'you' ? youMerger : othersMerger;
+      const merged = merger.merge(trimmed).trim();
+      if (!merged) return;
+
+      const entry: TranscriptEntry = {
+        id: `msg-${crypto.randomUUID()}`,
+        speaker,
+        text: merged,
+        language,
+        timestamp,
+        sessionId: `session-${currentSessionId}`,
+      };
+
+      const list = await loadTranscriptEntries();
+      list.push(entry);
+      await saveTranscriptEntries(list);
+      chrome.runtime.sendMessage({
+        type: 'HEARLY_NEW_TRANSCRIPT_ENTRY',
+        entry,
       });
+    })();
+  }
+
+  if (message.type === 'HEARLY_VERIFY_VOICE_WINDOW' && Array.isArray(message.samples)) {
+    const samples = message.samples;
+    chrome.storage.local.get(['hearly_voice_runtime_profile'], (result) => {
+      void (async () => {
+        const profile = result.hearly_voice_runtime_profile as RuntimeVoiceProfile | undefined;
+        if (profile?.embeddingModel !== 'onnx-ready' || !profile.embedding) {
+          sendResponse({ matched: false, score: 0, unavailable: true });
+          return;
+        }
+
+        try {
+          const candidate = await embedPcmWindowWithOnnx(
+            new Float32Array(samples),
+            message.sampleRate ?? 48000,
+          );
+          const comparison = compareSpeakerEmbeddings(
+            new Float32Array(profile.embedding),
+            candidate.embedding,
+            message.threshold ?? 0.58,
+          );
+          if (candidate.modelStatus !== 'onnx-ready') {
+            sendResponse({ matched: false, score: 0, unavailable: true });
+            return;
+          }
+          sendResponse({
+            matched: comparison.matched,
+            score: comparison.score,
+            unavailable: false,
+          });
+        } catch (error) {
+          console.warn('[Hearly] Runtime ONNX voice verification failed:', error);
+          sendResponse({ matched: false, score: 0, unavailable: true });
+        }
+      })();
+    });
+    return true;
   }
 }
 

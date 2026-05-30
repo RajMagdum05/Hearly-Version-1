@@ -15,13 +15,13 @@ declare function registerProcessor(
 ): void;
 
 declare const currentTime: number;
+declare const sampleRate: number;
 
 class HearyVoiceProcessor extends AudioWorkletProcessor {
   private ringBuffer: Float32Array;
   private writeIndex: number = 0;
-  private sampleRate: number = 16000;
+  private readonly processorSampleRate: number;
   private windowSize: number;
-  private rmsThreshold: number = 0.012;
   private lastMatchTime: number = 0;
   private duckedGain: number = 0.08;
   private targetGain: number = 1.0;
@@ -29,10 +29,19 @@ class HearyVoiceProcessor extends AudioWorkletProcessor {
   private filterActive: boolean = false;
   private enrolledEmbedding: Float32Array | null = null;
   private similarityThreshold: number = 0.58;
+  private samplesSinceEvaluation: number = 0;
+  private samplesSinceExternalWindow: number = 0;
+  private fastEnergy: number = 0;
+  private slowEnergy: number = 0;
+  private noiseFloor: number = 0.004;
+  private speechHangoverSamples: number = 0;
+  private lastVadState: boolean = false;
+  private lastVadReportTime: number = 0;
 
   constructor() {
     super();
-    this.windowSize = Math.floor(this.sampleRate * 1.6); // 1.6-second window
+    this.processorSampleRate = typeof sampleRate === 'number' && sampleRate > 0 ? sampleRate : 48000;
+    this.windowSize = Math.floor(this.processorSampleRate * 1.6); // 1.6-second speaker window
     this.ringBuffer = new Float32Array(this.windowSize);
     
     this.port.onmessage = (event: MessageEvent) => {
@@ -42,6 +51,17 @@ class HearyVoiceProcessor extends AudioWorkletProcessor {
         this.similarityThreshold = payload.threshold ?? 0.58;
       } else if (type === 'SET_FILTER_ACTIVE') {
         this.filterActive = payload.active;
+      } else if (type === 'SET_EXTERNAL_MATCH') {
+        if (payload.matched) {
+          this.lastMatchTime = currentTime;
+        }
+        this.port.postMessage({
+          type: 'VOICE_MATCH_EVALUATION',
+          score: payload.score ?? 0,
+          matched: Boolean(payload.matched),
+          threshold: this.similarityThreshold,
+          vadConfidence: payload.vadConfidence ?? 0,
+        });
       }
     };
   }
@@ -88,7 +108,7 @@ class HearyVoiceProcessor extends AudioWorkletProcessor {
     return Math.max(0, best);
   }
 
-  private extractFeatures(samples: Float32Array, sampleRate: number): Float32Array {
+  private extractFeatures(samples: Float32Array, sampleRateHz: number): Float32Array {
     const segmentCount = 24;
     const featuresPerSegment = 8;
     const embedding = new Float32Array(segmentCount * featuresPerSegment);
@@ -136,7 +156,7 @@ class HearyVoiceProcessor extends AudioWorkletProcessor {
       embedding[offset + 6] = Math.min(1, (attack / length) * 20);
 
       const segmentSamples = samples.slice(start, end);
-      const pitchStrength = this.estimatePitchStrength(segmentSamples, sampleRate);
+      const pitchStrength = this.estimatePitchStrength(segmentSamples, sampleRateHz);
       const quietness = 1 - Math.min(1, rms * 4);
       embedding[offset + 7] = Math.min(1, pitchStrength + quietness * 0.12);
     }
@@ -150,6 +170,58 @@ class HearyVoiceProcessor extends AudioWorkletProcessor {
     }
 
     return embedding;
+  }
+
+  private analyzeVoiceActivity(samples: Float32Array): {
+    isSpeech: boolean;
+    confidence: number;
+    rms: number;
+    noiseFloor: number;
+  } {
+    let sumSquares = 0;
+    let zeroCrossings = 0;
+
+    for (let i = 0; i < samples.length; i++) {
+      const sample = samples[i] ?? 0;
+      sumSquares += sample * sample;
+      if (i > 0) {
+        const previous = samples[i - 1] ?? 0;
+        if ((sample >= 0 && previous < 0) || (sample < 0 && previous >= 0)) {
+          zeroCrossings += 1;
+        }
+      }
+    }
+
+    const rms = Math.sqrt(sumSquares / Math.max(1, samples.length));
+    const zcr = zeroCrossings / Math.max(1, samples.length - 1);
+
+    this.fastEnergy = (0.18 * rms) + (0.82 * this.fastEnergy);
+    this.slowEnergy = (0.025 * rms) + (0.975 * this.slowEnergy);
+
+    const floorThreshold = Math.max(0.006, this.noiseFloor * 3.1 + 0.004);
+    const energyLooksLikeSpeech =
+      this.fastEnergy > floorThreshold &&
+      this.fastEnergy > this.slowEnergy * 1.18;
+    const shapeLooksLikeVoice = zcr > 0.004 && zcr < 0.36;
+    const instantPeak = rms > Math.max(0.018, this.noiseFloor * 4.5);
+    const rawSpeech = (energyLooksLikeSpeech && shapeLooksLikeVoice) || instantPeak;
+
+    if (!rawSpeech) {
+      this.noiseFloor = (0.035 * rms) + (0.965 * this.noiseFloor);
+    } else {
+      this.speechHangoverSamples = Math.floor(this.processorSampleRate * 0.28);
+    }
+
+    if (!rawSpeech && this.speechHangoverSamples > 0) {
+      this.speechHangoverSamples = Math.max(0, this.speechHangoverSamples - samples.length);
+    }
+
+    const isSpeech = rawSpeech || this.speechHangoverSamples > 0;
+    const confidence = isSpeech
+      ? Math.min(1, Math.max(0, (this.fastEnergy - floorThreshold) / Math.max(0.001, floorThreshold * 4)))
+      : 0;
+
+    return { isSpeech, confidence, rms, noiseFloor: this.noiseFloor };
   }
 
   process(inputs: Float32Array[][], outputs: Float32Array[][], _parameters: Record<string, Float32Array>): boolean {
@@ -166,32 +238,68 @@ class HearyVoiceProcessor extends AudioWorkletProcessor {
       this.writeIndex = (this.writeIndex + 1) % this.windowSize;
     }
 
-    // 2. Compute RMS of the current frame
-    let frameSumSquares = 0;
-    for (let i = 0; i < length; i++) {
-      const val = channelData[i] ?? 0;
-      frameSumSquares += val * val;
+    // 2. Adaptive voice activity detection.
+    const vad = this.analyzeVoiceActivity(channelData);
+    const hasSpeech = vad.isSpeech;
+    if (hasSpeech !== this.lastVadState || currentTime - this.lastVadReportTime > 1.0) {
+      this.lastVadState = hasSpeech;
+      this.lastVadReportTime = currentTime;
+      this.port.postMessage({
+        type: 'VOICE_ACTIVITY',
+        isSpeech: hasSpeech,
+        confidence: vad.confidence,
+        rms: vad.rms,
+        noiseFloor: vad.noiseFloor,
+      });
     }
-    const frameRms = Math.sqrt(frameSumSquares / length);
-    const hasSpeech = frameRms > this.rmsThreshold;
 
     // 3. Periodic verification evaluation
-    // Since process handles 128 samples, we trigger evaluations periodically.
-    // Evaluating on every full ring buffer cycle (approx 1.6s at 16kHz)
-    if (this.writeIndex === 0 && this.enrolledEmbedding && this.filterActive) {
+    this.samplesSinceEvaluation += length;
+    this.samplesSinceExternalWindow += length;
+    const evaluationInterval = Math.floor(this.processorSampleRate * 0.35);
+    if (
+      this.samplesSinceExternalWindow >= evaluationInterval &&
+      hasSpeech &&
+      this.filterActive
+    ) {
+      this.samplesSinceExternalWindow = 0;
+      const linearBuffer = new Float32Array(this.windowSize);
+      for (let i = 0; i < this.windowSize; i++) {
+        linearBuffer[i] = this.ringBuffer[(this.writeIndex + i) % this.windowSize] ?? 0;
+      }
+      this.port.postMessage(
+        {
+          type: 'VOICE_WINDOW',
+          samples: linearBuffer.buffer,
+          sampleRate: this.processorSampleRate,
+          vadConfidence: vad.confidence,
+        },
+        [linearBuffer.buffer],
+      );
+    }
+
+    if (
+      this.samplesSinceEvaluation >= evaluationInterval &&
+      hasSpeech &&
+      this.enrolledEmbedding &&
+      this.filterActive
+    ) {
+      this.samplesSinceEvaluation = 0;
       const linearBuffer = new Float32Array(this.windowSize);
       for (let i = 0; i < this.windowSize; i++) {
         linearBuffer[i] = this.ringBuffer[(this.writeIndex + i) % this.windowSize] ?? 0;
       }
 
-      const currentEmbedding = this.extractFeatures(linearBuffer, this.sampleRate);
+      const currentEmbedding = this.extractFeatures(linearBuffer, this.processorSampleRate);
       const similarity = this.cosineSimilarity(this.enrolledEmbedding, currentEmbedding);
       const isMatch = similarity >= this.similarityThreshold;
 
       this.port.postMessage({
         type: 'VOICE_MATCH_EVALUATION',
         score: similarity,
-        matched: isMatch
+        matched: isMatch,
+        threshold: this.similarityThreshold,
+        vadConfidence: vad.confidence,
       });
 
       if (isMatch) {

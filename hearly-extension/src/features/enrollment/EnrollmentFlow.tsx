@@ -4,8 +4,8 @@ import { HearlyLogoMark } from '@/ui/shared/HearlyLogoMark';
 import { Phase1_Intro } from './Phase1_Intro';
 import { Phase2_Record } from './Phase2_Record';
 import { Phase3_Done } from './Phase3_Done';
-import { enrollVoiceInCloud } from '@/services/cloudService';
 import { saveEnrollmentState } from '../../services/storageService';
+import type { SpeakerModelStatus } from '@/ai/localSpeakerModel';
 
 /** Must match extension popup shell; avoid fixed positioning inside MV3 popup documents. */
 const POPUP_W = 'w-[380px]';
@@ -21,7 +21,12 @@ const secondaryButtonClass =
 
 export interface EnrollmentFlowProps {
   onClose: () => void;
-  onComplete: (name: string, embedding: Float32Array, cloudProfileId?: string) => void;
+  onComplete: (
+    name: string,
+    embedding: Float32Array,
+    embeddingModel: SpeakerModelStatus,
+    cloudProfileId?: string,
+  ) => void;
 }
 
 function StepHeader({ step }: { step: number }) {
@@ -50,42 +55,24 @@ export function EnrollmentFlow({ onClose, onComplete }: EnrollmentFlowProps) {
   const [isRecording, setIsRecording] = useState(false);
   const [hasRecording, setHasRecording] = useState(false);
   const [voiceEmbedding, setVoiceEmbedding] = useState<Float32Array | null>(null);
-  const [phraseAudio, setPhraseAudio] = useState<Blob[]>([]);
+  const [embeddingModel, setEmbeddingModel] = useState<SpeakerModelStatus>('fallback');
   const [cloudProfileId, setCloudProfileId] = useState<string | undefined>();
-  const [cloudError, setCloudError] = useState<string | null>(null);
-  const [isCloudEnrolling, setIsCloudEnrolling] = useState(false);
-  const handleTrainingComplete = useCallback((embedding: Float32Array, audio: Blob[]) => {
+  const handleTrainingComplete = useCallback((
+    embedding: Float32Array,
+    audio: Blob[],
+    modelStatus: SpeakerModelStatus,
+  ) => {
     setVoiceEmbedding(embedding);
-    setPhraseAudio(audio);
+    setEmbeddingModel(modelStatus);
+    void audio;
     setHasRecording(true);
     setIsRecording(false);
   }, []);
 
-  const trainVoice = async () => {
+  const trainVoice = () => {
     if (!voiceEmbedding) return;
-
-    setCloudError(null);
-    setIsCloudEnrolling(true);
-    try {
-      const cloudResult = await enrollVoiceInCloud({
-        userName: name,
-        phraseAudio,
-        localEmbedding: voiceEmbedding,
-      });
-      if (cloudResult?.embedding) {
-        setVoiceEmbedding(new Float32Array(cloudResult.embedding));
-      }
-      setCloudProfileId(cloudResult?.profileId);
-      setStep(2);
-    } catch (error) {
-      setCloudError(
-        error instanceof Error
-          ? error.message
-          : 'Could not enroll your voice with Hearly cloud.',
-      );
-    } finally {
-      setIsCloudEnrolling(false);
-    }
+    setCloudProfileId(undefined);
+    setStep(2);
   };
 
   return (
@@ -163,9 +150,8 @@ export function EnrollmentFlow({ onClose, onComplete }: EnrollmentFlowProps) {
                       }
                       setHasRecording(false);
                       setVoiceEmbedding(null);
-                      setPhraseAudio([]);
+                      setEmbeddingModel('fallback');
                       setCloudProfileId(undefined);
-                      setCloudError(null);
                       return true;
                     });
                   }}
@@ -183,17 +169,12 @@ export function EnrollmentFlow({ onClose, onComplete }: EnrollmentFlowProps) {
                 <Button
                   variant="secondary"
                   className={`flex-1 ${primaryButtonClass}`}
-                  disabled={!hasRecording || !voiceEmbedding || isCloudEnrolling}
+                  disabled={!hasRecording || !voiceEmbedding}
                   onClick={trainVoice}
                 >
-                  {isCloudEnrolling ? 'Training...' : 'Train Voice'}
+                  Train Voice
                 </Button>
               </div>
-              {cloudError ? (
-                <p className="mt-3 text-center text-[11px] font-medium leading-relaxed text-hearly-danger">
-                  {cloudError}
-                </p>
-              ) : null}
             </>
           )}
 
@@ -216,7 +197,7 @@ export function EnrollmentFlow({ onClose, onComplete }: EnrollmentFlowProps) {
                 disabled={!voiceEmbedding}
                 onClick={() => {
                   if (!voiceEmbedding) return;
-                  onComplete(name, voiceEmbedding, cloudProfileId);
+                  onComplete(name, voiceEmbedding, embeddingModel, cloudProfileId);
                   saveEnrollmentState({ isEnrolled: true, userName: name });
                 }}
               >
