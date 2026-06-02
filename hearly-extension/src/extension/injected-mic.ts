@@ -1,4 +1,5 @@
 import { StreamingRecorder } from '../audio/streamingRecorder';
+import { SPEAKER_SIMILARITY_THRESHOLD } from '../config/constants';
 
 type HearlyPageRequest = {
   source: 'hearly-page';
@@ -65,7 +66,7 @@ function requestMicState(): Promise<{
   return new Promise((resolve) => {
     const timeout = window.setTimeout(() => {
       window.removeEventListener('message', handleMessage);
-      resolve({ enabled: false, embedding: null, threshold: 0.58, workletUrl: '', transcriptionEnabled: false });
+      resolve({ enabled: false, embedding: null, threshold: SPEAKER_SIMILARITY_THRESHOLD, workletUrl: '', transcriptionEnabled: false });
     }, 500);
 
     const handleMessage = (event: MessageEvent<HearlyContentResponse>) => {
@@ -84,7 +85,7 @@ function requestMicState(): Promise<{
       resolve({
         enabled: data.enabled,
         embedding: data.embedding ? new Float32Array(data.embedding) : null,
-        threshold: data.threshold ?? 0.58,
+        threshold: data.threshold ?? SPEAKER_SIMILARITY_THRESHOLD,
         workletUrl: data.workletUrl ?? '',
         transcriptionEnabled: data.transcriptionEnabled ?? false,
       });
@@ -144,8 +145,9 @@ window.addEventListener('message', (event: MessageEvent) => {
           activeMicRecorder.start();
         }
       } else {
-        if (activeMicRecorder) {
-          activeMicRecorder.stop();
+        const recorder = activeMicRecorder;
+        if (recorder) {
+          recorder.stop();
           activeMicRecorder = null;
         }
       }
@@ -219,8 +221,9 @@ async function processUserMicStream(
 
   stream.getTracks().forEach((track) => {
     track.addEventListener('ended', () => {
-      if (activeMicRecorder) {
-        activeMicRecorder.stop();
+      const recorder = activeMicRecorder;
+      if (recorder) {
+        recorder.stop();
         activeMicRecorder = null;
       }
       workletNode.disconnect();

@@ -57,62 +57,73 @@ function normalizeWords(value: string) {
     .filter(Boolean);
 }
 
-function getMatchedWordCount(targetWords: readonly string[], spokenText: string) {
-  const spokenWords = normalizeWords(spokenText);
-  let matched = 0;
+function isSpokenWordMatch(spokenWord: string, target: string) {
+  if (spokenWord === target) {
+    return true;
+  }
+
+  if (target === 'hey') {
+    return spokenWord === 'hay' || spokenWord === 'hei';
+  }
+
+  if (target === 'hearly') {
+    return (
+      spokenWord === 'early' ||
+      spokenWord.includes('earl') ||
+      spokenWord.includes('harl') ||
+      spokenWord.endsWith('ly')
+    );
+  }
+
+  if (target.length >= 4 && spokenWord.length >= 4) {
+    return (
+      target.includes(spokenWord) ||
+      spokenWord.includes(target) ||
+      target.slice(0, 3) === spokenWord.slice(0, 3)
+    );
+  }
+
+  return false;
+}
+
+function countSequentialMatches(
+  targetWords: readonly string[],
+  spokenWords: readonly string[],
+  startIndex: number,
+) {
+  let matched = startIndex;
 
   for (const spokenWord of spokenWords) {
     if (matched >= targetWords.length) break;
 
     const target = targetWords[matched];
-
-    if (spokenWord === target) {
+    if (isSpokenWordMatch(spokenWord, target)) {
       matched += 1;
       continue;
     }
 
-    // Fuzzy match for "hearly" which speech recognition often misinterprets
-    if (target === 'hearly') {
-      if (
-        spokenWord.includes('earl') ||
-        spokenWord.includes('harl') ||
-        spokenWord.endsWith('ly') ||
-        spokenWord.startsWith('h')
-      ) {
-        matched += 1;
-        continue;
-      }
+    if (matched > startIndex) {
+      break;
     }
-
-    // Allow partial matches for longer words (like unusual names)
-    if (target.length >= 4 && spokenWord.length >= 4) {
-      if (
-        target.includes(spokenWord) ||
-        spokenWord.includes(target) ||
-        target.slice(0, 3) === spokenWord.slice(0, 3)
-      ) {
-        matched += 1;
-        continue;
-      }
-    }
-
-    // Lookahead to allow skipping up to 2 misrecognized words
-    if (matched + 1 < targetWords.length && spokenWord === targetWords[matched + 1]) {
-      matched += 2;
-      continue;
-    }
-    if (matched + 2 < targetWords.length && spokenWord === targetWords[matched + 2]) {
-      matched += 3;
-      continue;
-    }
-  }
-
-  // If they are stuck on the very last word but have said enough words, autocomplete
-  if (matched === targetWords.length - 1 && spokenWords.length >= targetWords.length) {
-    matched += 1;
   }
 
   return matched;
+}
+
+function getMatchedWordCount(
+  targetWords: readonly string[],
+  spokenText: string,
+  currentMatched: number,
+) {
+  const spokenWords = normalizeWords(spokenText);
+  const fromBeginning = countSequentialMatches(targetWords, spokenWords, 0);
+  const fromCurrentWord = countSequentialMatches(
+    targetWords,
+    spokenWords,
+    currentMatched,
+  );
+
+  return Math.max(currentMatched, fromBeginning, fromCurrentWord);
 }
 
 function stopRecognition(recognition: SpeechRecognitionLike) {
@@ -202,6 +213,7 @@ export function Phase2_Record({
   const audioChunksRef = useRef<Blob[]>([]);
   const phraseAudioRef = useRef<Blob[]>([]);
   const fingerprintsRef = useRef<Float32Array[]>([]);
+  const activeWordRef = useRef(0);
 
   const completedWordsBeforeActive = phraseWords
     .slice(0, activePhrase)
@@ -229,6 +241,7 @@ export function Phase2_Record({
     if (isRecording && !hasRecording) {
       if (!phraseReadyNext) {
         setActiveWord(0);
+        activeWordRef.current = 0;
       }
       setRecordingError(null);
       completeNotifiedRef.current = false;
@@ -317,9 +330,13 @@ export function Phase2_Record({
     mediaStreamRef.current = null;
 
     try {
+      console.info('[Hearly Enrollment] Generating fingerprint for completed phrase sample.');
       const fingerprint = await extractVoiceFingerprintFromBlob(blob);
       phraseAudioRef.current.push(blob);
       fingerprintsRef.current.push(fingerprint);
+      console.info(
+        `[Hearly Enrollment] Fingerprint generated: ${fingerprint.length} dimensions; sample ${fingerprintsRef.current.length}/${phrases.length}.`,
+      );
       return fingerprint;
     } catch {
       setRecordingError('Could not read that voice sample. Please try again.');
@@ -338,8 +355,12 @@ export function Phase2_Record({
 
     if (isFinalPhrase && !completeNotifiedRef.current) {
       completeNotifiedRef.current = true;
+      const averagedFingerprint = averageFingerprints(fingerprintsRef.current);
+      console.info(
+        `[Hearly Enrollment] Averaged ${fingerprintsRef.current.length} fingerprints into enrolled voiceprint with ${averagedFingerprint.length} dimensions.`,
+      );
       onTrainingComplete(
-        averageFingerprints(fingerprintsRef.current),
+        averagedFingerprint,
         [...phraseAudioRef.current],
       );
       return;
@@ -394,10 +415,20 @@ export function Phase2_Record({
         }
 
         const targetWords = normalizedPhraseWords[activePhrase];
-        const matchedWords = getMatchedWordCount(targetWords, transcript);
-        setActiveWord(Math.min(matchedWords, phraseWords[activePhrase].length));
+        const matchedWords = getMatchedWordCount(
+          targetWords,
+          transcript,
+          activeWordRef.current,
+        );
+        const nextMatchedWords = Math.min(
+          matchedWords,
+          phraseWords[activePhrase].length,
+        );
 
-        if (matchedWords >= targetWords.length) {
+        activeWordRef.current = nextMatchedWords;
+        setActiveWord(nextMatchedWords);
+
+        if (nextMatchedWords >= targetWords.length) {
           setPhraseReadyNext(true);
           stopRecognition(recognition);
 
@@ -469,6 +500,7 @@ export function Phase2_Record({
     if (hasRecording) {
       setActivePhrase(0);
       setActiveWord(0);
+      activeWordRef.current = 0;
       setPhraseReadyNext(false);
       fingerprintsRef.current = [];
       phraseAudioRef.current = [];
@@ -481,6 +513,7 @@ export function Phase2_Record({
     setSpeechSupported(true);
     setActivePhrase((phraseIndex) => Math.min(phraseIndex + 1, phrases.length - 1));
     setActiveWord(0);
+    activeWordRef.current = 0;
     setPhraseReadyNext(false);
     onToggleRecord();
   };

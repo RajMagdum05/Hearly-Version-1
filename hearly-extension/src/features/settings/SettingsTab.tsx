@@ -3,6 +3,7 @@ import { Button, Modal } from '@/ui/shared';
 import { AppFooter } from './AppFooter';
 import { NotificationsCard } from './NotificationsCard';
 import { VoiceProfileCard } from './VoiceProfileCard';
+import { VoiceVerificationTestPanel } from './VoiceVerificationTestPanel';
 
 export interface SettingsTabProps {
   userName: string;
@@ -42,6 +43,8 @@ export function SettingsTab({
           onRetrain={onRetrain}
           onRemoveRequest={() => setConfirmOpen(true)}
         />
+
+        <VoiceVerificationTestPanel />
 
         <NotificationsCard
           notifyVersions={notifyVersions}

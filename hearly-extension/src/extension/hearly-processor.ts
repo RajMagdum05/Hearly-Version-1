@@ -15,33 +15,42 @@ declare function registerProcessor(
 ): void;
 
 declare const currentTime: number;
+declare const sampleRate: number;
+
+const DEFAULT_SIMILARITY_THRESHOLD = 0.75;
 
 class HearyVoiceProcessor extends AudioWorkletProcessor {
   private ringBuffer: Float32Array;
   private writeIndex: number = 0;
-  private sampleRate: number = 16000;
+  private readonly processorSampleRate: number;
   private windowSize: number;
   private rmsThreshold: number = 0.012;
-  private lastMatchTime: number = 0;
-  private duckedGain: number = 0.08;
+  private lastMatchTime: number = Number.NEGATIVE_INFINITY;
+  private blockedGain: number = 0;
   private targetGain: number = 1.0;
   private currentGain: number = 1.0;
   private filterActive: boolean = false;
   private enrolledEmbedding: Float32Array | null = null;
-  private similarityThreshold: number = 0.58;
+  private similarityThreshold: number = DEFAULT_SIMILARITY_THRESHOLD;
+  private samplesSinceEvaluation: number = 0;
+  private samplesSeen: number = 0;
 
   constructor() {
     super();
-    this.windowSize = Math.floor(this.sampleRate * 1.6); // 1.6-second window
+    this.processorSampleRate = typeof sampleRate === 'number' && sampleRate > 0 ? sampleRate : 48000;
+    this.windowSize = Math.floor(this.processorSampleRate * 0.75);
     this.ringBuffer = new Float32Array(this.windowSize);
     
     this.port.onmessage = (event: MessageEvent) => {
       const { type, payload } = event.data;
       if (type === 'SET_EMBEDDING') {
         this.enrolledEmbedding = new Float32Array(payload.embedding);
-        this.similarityThreshold = payload.threshold ?? 0.58;
+        this.similarityThreshold = payload.threshold ?? DEFAULT_SIMILARITY_THRESHOLD;
       } else if (type === 'SET_FILTER_ACTIVE') {
         this.filterActive = payload.active;
+        if (!payload.active) {
+          this.lastMatchTime = Number.NEGATIVE_INFINITY;
+        }
       }
     };
   }
@@ -165,6 +174,7 @@ class HearyVoiceProcessor extends AudioWorkletProcessor {
       this.ringBuffer[this.writeIndex] = channelData[i] ?? 0;
       this.writeIndex = (this.writeIndex + 1) % this.windowSize;
     }
+    this.samplesSeen += length;
 
     // 2. Compute RMS of the current frame
     let frameSumSquares = 0;
@@ -175,16 +185,23 @@ class HearyVoiceProcessor extends AudioWorkletProcessor {
     const frameRms = Math.sqrt(frameSumSquares / length);
     const hasSpeech = frameRms > this.rmsThreshold;
 
-    // 3. Periodic verification evaluation
-    // Since process handles 128 samples, we trigger evaluations periodically.
-    // Evaluating on every full ring buffer cycle (approx 1.6s at 16kHz)
-    if (this.writeIndex === 0 && this.enrolledEmbedding && this.filterActive) {
+    // 3. Low-latency periodic speaker verification.
+    this.samplesSinceEvaluation += length;
+    const evaluationInterval = Math.floor(this.processorSampleRate * 0.18);
+    if (
+      this.samplesSinceEvaluation >= evaluationInterval &&
+      this.samplesSeen >= this.windowSize &&
+      hasSpeech &&
+      this.enrolledEmbedding &&
+      this.filterActive
+    ) {
+      this.samplesSinceEvaluation = 0;
       const linearBuffer = new Float32Array(this.windowSize);
       for (let i = 0; i < this.windowSize; i++) {
         linearBuffer[i] = this.ringBuffer[(this.writeIndex + i) % this.windowSize] ?? 0;
       }
 
-      const currentEmbedding = this.extractFeatures(linearBuffer, this.sampleRate);
+      const currentEmbedding = this.extractFeatures(linearBuffer, this.processorSampleRate);
       const similarity = this.cosineSimilarity(this.enrolledEmbedding, currentEmbedding);
       const isMatch = similarity >= this.similarityThreshold;
 
@@ -200,10 +217,10 @@ class HearyVoiceProcessor extends AudioWorkletProcessor {
     }
 
     // 4. Determine target gain based on active speech matching
-    if (this.filterActive) {
-      const matchGracePeriod = 2.0; // 2 seconds window of tolerance
+    if (this.filterActive && this.enrolledEmbedding) {
+      const matchGracePeriod = 0.45;
       const isWithinMatchGrace = (currentTime - this.lastMatchTime) < matchGracePeriod;
-      this.targetGain = !hasSpeech || isWithinMatchGrace ? 1.0 : this.duckedGain;
+      this.targetGain = !hasSpeech || isWithinMatchGrace ? 1.0 : this.blockedGain;
     } else {
       this.targetGain = 1.0;
     }
@@ -211,7 +228,8 @@ class HearyVoiceProcessor extends AudioWorkletProcessor {
     // 5. Exponential gain smoothing
     const channels = output.length;
     for (let i = 0; i < length; i++) {
-      this.currentGain += (this.targetGain - this.currentGain) * 0.05;
+      const smoothing = this.targetGain < this.currentGain ? 0.32 : 0.12;
+      this.currentGain += (this.targetGain - this.currentGain) * smoothing;
       for (let c = 0; c < channels; c++) {
         if (output[c]) {
           output[c][i] = (channelData[i] ?? 0) * this.currentGain;

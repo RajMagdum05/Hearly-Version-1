@@ -1,4 +1,4 @@
-import { HearlyLogoMark } from '@/ui/shared/HearlyLogoMark';
+
 
 const LINKEDIN = 'https://www.linkedin.com/';
 const INSTAGRAM = 'https://www.instagram.com/';
@@ -24,7 +24,7 @@ export function AppFooter() {
     <footer className="pt-1 text-center" aria-label="App information">
       <div className="rounded-2xl border border-white/[0.07] bg-white/[0.025] px-4 py-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.045)]">
         <div className="flex justify-center">
-          <HearlyLogoMark size="sm" glow animated={false} />
+          <img src="hearly-logo.png" alt="Hearly Logo" className="h-6 w-auto object-contain" />
         </div>
         <p className="mt-3 text-[15px] font-semibold leading-none tracking-[-0.03em] text-white">
           Hearly

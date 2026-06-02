@@ -276,10 +276,9 @@ function PopupApp() {
     return (
       <EnrollmentFlow
         onClose={() => setEnrollmentOpen(false)}
-        onComplete={(name, embedding, cloudProfileId) => {
+        onComplete={(name, embedding) => {
           const profile = {
             id: crypto.randomUUID(),
-            cloudProfileId,
             userName: name,
             embedding,
             enrolledAt: Date.now(),

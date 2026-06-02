@@ -1,4 +1,3 @@
-import { ListeningWaveform } from '@/ui/animations/ListeningWaveform';
 import { AudioWaveform } from '@/ui/shared/AudioWaveform';
 
 export interface EnrolledHomePanelProps {
@@ -65,15 +64,11 @@ export function EnrolledHomePanel({
         </p>
       ) : null}
 
-      <div
-        className="mt-5 w-full max-w-[300px] px-0.5"
-        role="status"
-        aria-label={
-          filterActive ? 'Voice filter active' : 'Voice filter paused'
-        }
-      >
-        <ListeningWaveform energetic={filterActive} className="w-full" />
-      </div>
+      {!capturing && filterActive && (
+        <div className="mt-5 w-full max-w-[300px] px-0.5" role="status" aria-label="Voice filter active">
+          <AudioWaveform analyser={null} isActive={true} />
+        </div>
+      )}
 
       <p className="mt-5 max-w-[280px] text-center text-[11px] font-normal leading-relaxed tracking-[-0.01em] text-hearly-secondary">
         {filterActive

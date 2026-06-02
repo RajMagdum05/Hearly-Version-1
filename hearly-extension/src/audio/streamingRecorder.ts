@@ -133,8 +133,9 @@ export class StreamingRecorder {
   }
 
   public stop() {
-    if (this.intervalId) {
-      clearInterval(this.intervalId);
+    const intId = this.intervalId;
+    if (intId) {
+      clearInterval(intId);
       this.intervalId = null;
     }
     
@@ -151,16 +152,19 @@ export class StreamingRecorder {
       this.mediaRecorder2 = null;
     }
 
-    if (this.scriptProcessor) {
-      this.scriptProcessor.disconnect();
+    const proc = this.scriptProcessor;
+    if (proc) {
+      proc.disconnect();
       this.scriptProcessor = null;
     }
-    if (this.analyser) {
-      this.analyser.disconnect();
+    const ana = this.analyser;
+    if (ana) {
+      ana.disconnect();
       this.analyser = null;
     }
-    if (this.audioContext) {
-      void this.audioContext.close();
+    const ctx = this.audioContext;
+    if (ctx) {
+      void ctx.close();
       this.audioContext = null;
     }
   }

@@ -1,5 +1,8 @@
 import { HearlyMessage } from '../messages'
 import { StreamingRecorder } from '../../audio/streamingRecorder'
+import { loadVoiceProfile } from '../../services/storageService'
+import { SPEAKER_SIMILARITY_THRESHOLD } from '../../config/constants'
+import { showHearlySubtitle } from './subtitleOverlay'
 
 type EnrollmentStorageResult = {
   hearly_enrollment?: {
@@ -35,14 +38,15 @@ function installMicBridge() {
     if (data?.source !== 'hearly-page') return
 
     if (data.type === 'GET_MIC_STATE' && data.requestId) {
-      chrome.storage.local.get(['hearly_filter', 'hearly_voice_profile', 'hearly_transcript'], (result: EnrollmentStorageResult) => {
+      chrome.storage.local.get(['hearly_filter', 'hearly_transcript'], async (result: EnrollmentStorageResult) => {
+        const profile = await loadVoiceProfile()
         window.postMessage({
           source: 'hearly-content',
           type: 'MIC_STATE',
           requestId: data.requestId,
           enabled: result.hearly_filter?.isActive === true,
-          embedding: result.hearly_voice_profile?.embedding ?? null,
-          threshold: 0.58,
+          embedding: profile?.embedding ? Array.from(profile.embedding) : null,
+          threshold: SPEAKER_SIMILARITY_THRESHOLD,
           workletUrl: chrome.runtime.getURL('hearly-processor.js'),
           transcriptionEnabled: result.hearly_transcript?.isEnabled === true,
         }, window.location.origin)
@@ -118,10 +122,13 @@ function sendMeetingEnded() {
 
 // ─── Banner Injection ──────────────────────────────────────────────────────
 
+let bannerDismissed = false;
+
 function injectHearlyBanner(): void {
-  if (document.getElementById('hearly-banner')) return
+  if (bannerDismissed || document.getElementById('hearly-banner')) return
 
   chrome.storage.local.get('hearly_enrollment', (result: EnrollmentStorageResult) => {
+    if (bannerDismissed || document.getElementById('hearly-banner')) return
     const isEnrolled = result?.hearly_enrollment?.isEnrolled === true
 
     const banner = document.createElement('div')
@@ -255,21 +262,39 @@ function injectHearlyBanner(): void {
       `
     }
 
-    document.body.appendChild(banner)
+    const appendToBody = () => {
+      if (bannerDismissed || document.getElementById('hearly-banner')) return
+      if (document.body) {
+        document.body.appendChild(banner)
 
-    document.getElementById('hearly-activate-btn')?.addEventListener('click', () => {
-      chrome.runtime.sendMessage({ type: 'ACTIVATE_HEARLY' })
-      banner.remove()
-    })
+        document.getElementById('hearly-activate-btn')?.addEventListener('click', () => {
+          chrome.runtime.sendMessage({ type: 'ACTIVATE_HEARLY' })
+          bannerDismissed = true
+          banner.remove()
+        })
 
-    document.getElementById('hearly-train-btn')?.addEventListener('click', () => {
-      chrome.runtime.sendMessage({ type: 'OPEN_POPUP' })
-      banner.remove()
-    })
+        document.getElementById('hearly-train-btn')?.addEventListener('click', () => {
+          chrome.runtime.sendMessage({ type: 'OPEN_POPUP' })
+          bannerDismissed = true
+          banner.remove()
+        })
 
-    document.getElementById('hearly-dismiss-btn')?.addEventListener('click', () => {
-      banner.remove()
-    })
+        document.getElementById('hearly-dismiss-btn')?.addEventListener('click', () => {
+          bannerDismissed = true
+          banner.remove()
+        })
+      } else {
+        const bodyObserver = new MutationObserver((_, obs) => {
+          if (document.body) {
+            obs.disconnect()
+            appendToBody()
+          }
+        })
+        bodyObserver.observe(document.documentElement, { childList: true, subtree: true })
+      }
+    }
+
+    appendToBody()
   })
 }
 
@@ -281,42 +306,48 @@ function init() {
   console.log('[Hearly] Teams domain detected — watching for meeting...')
 
   // Inject banner immediately on Teams domain
-  // Teams meeting may already be active or loading
   injectHearlyBanner()
 
-  if (detectMeeting()) {
-    sendMeetingDetected()
-    console.log('[Hearly] Teams meeting active on load')
+  const startObserver = () => {
+    if (!document.body) {
+      setTimeout(startObserver, 50)
+      return
+    }
+
+    if (detectMeeting()) {
+      sendMeetingDetected()
+      console.log('[Hearly] Teams meeting active on load')
+    }
+
+    let lastMeetingState = detectMeeting()
+
+    const observer = new MutationObserver(() => {
+      const currentState = detectMeeting()
+
+      if (currentState !== lastMeetingState) {
+        if (currentState) {
+          sendMeetingDetected()
+          console.log('[Hearly] Teams meeting started')
+        } else {
+          sendMeetingEnded()
+          console.log('[Hearly] Teams meeting ended')
+        }
+        lastMeetingState = currentState
+      }
+
+      // Re-inject banner if it was removed and not dismissed
+      if (!document.getElementById('hearly-banner') && !bannerDismissed) {
+        injectHearlyBanner()
+      }
+    })
+
+    observer.observe(document.body, {
+      subtree: true,
+      childList: true,
+    })
   }
 
-  // Watch for Teams SPA navigation and meeting state changes
-  // Teams is a Single Page App — URL and DOM change without full reload
-  let lastMeetingState = detectMeeting()
-
-  const observer = new MutationObserver(() => {
-    const currentState = detectMeeting()
-
-    if (currentState !== lastMeetingState) {
-      if (currentState) {
-        sendMeetingDetected()
-        console.log('[Hearly] Teams meeting started')
-      } else {
-        sendMeetingEnded()
-        console.log('[Hearly] Teams meeting ended')
-      }
-      lastMeetingState = currentState
-    }
-
-    // Re-inject banner if it was removed
-    if (!document.getElementById('hearly-banner')) {
-      injectHearlyBanner()
-    }
-  })
-
-  observer.observe(document.body, {
-    subtree: true,
-    childList: true,
-  })
+  startObserver()
 
   // Also watch URL changes for Teams SPA routing
   let lastUrl = window.location.href
@@ -324,7 +355,7 @@ function init() {
     if (window.location.href !== lastUrl) {
       lastUrl = window.location.href
       console.log('[Hearly] Teams URL changed:', lastUrl)
-      if (!document.getElementById('hearly-banner')) {
+      if (!document.getElementById('hearly-banner') && !bannerDismissed) {
         injectHearlyBanner()
       }
     }
@@ -343,24 +374,21 @@ let streamingRecorder: StreamingRecorder | null = null
 function startTranscriptionRecorder(stream: MediaStream) {
   if (streamingRecorder) return
   console.log('[Hearly] Starting transcription recorder...')
-  chrome.storage.local.get('hearly_app_settings', (settingsResult: any) => {
-    const language = settingsResult.hearly_app_settings?.language ?? 'en'
-    streamingRecorder = new StreamingRecorder(stream, 'others', (chunkBase64, timestamp) => {
-      chrome.runtime.sendMessage({
-        type: 'HEARLY_TRANSCRIBE_CHUNK',
-        audioBase64: chunkBase64,
-        language,
-        speaker: 'others',
-        timestamp,
-      })
+  streamingRecorder = new StreamingRecorder(stream, 'others', (chunkBase64, timestamp) => {
+    chrome.runtime.sendMessage({
+      type: 'HEARLY_TRANSCRIBE_CHUNK',
+      audioBase64: chunkBase64,
+      speaker: 'others',
+      timestamp,
     })
-    streamingRecorder.start()
   })
+  streamingRecorder.start()
 }
 
 function stopTranscriptionRecorder() {
-  if (streamingRecorder) {
-    streamingRecorder.stop()
+  const recorder = streamingRecorder
+  if (recorder) {
+    recorder.stop()
     streamingRecorder = null
   }
   console.log('[Hearly] Transcription recorder stopped')
@@ -368,14 +396,30 @@ function stopTranscriptionRecorder() {
 
 function stopMeetingAudioCapture(): void {
   stopTranscriptionRecorder()
-  if (sourceNode) { sourceNode.disconnect(); sourceNode = null }
-  if (audioContext) { audioContext.close(); audioContext = null }
-  if (mediaStream) { mediaStream.getTracks().forEach(t => t.stop()); mediaStream = null }
+  const node = sourceNode
+  if (node) {
+    node.disconnect()
+    sourceNode = null
+  }
+  const ctx = audioContext
+  if (ctx) {
+    ctx.close()
+    audioContext = null
+  }
+  const stream = mediaStream
+  if (stream) {
+    stream.getTracks().forEach(t => t.stop())
+    mediaStream = null
+  }
   console.log('[Hearly] Audio capture stopped on Teams page')
   chrome.runtime.sendMessage({ type: 'HEARLY_AUDIO_STOPPED', platform: 'teams' })
 }
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  if (message.type === 'HEARLY_NEW_TRANSCRIPT_ENTRY' && message.entry) {
+    showHearlySubtitle(message.entry)
+  }
+
   if (message.type === 'HEARBEAT_PING') {
     sendResponse({ status: 'pong' })
     return true
@@ -455,3 +499,112 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     })
   }
 })
+
+function injectHearlyIndicator(): void {
+  if (document.getElementById('hearly-indicator')) return;
+
+  const container = document.createElement('div');
+  container.id = 'hearly-indicator';
+  container.style.cssText = `
+    position: fixed;
+    bottom: 24px;
+    right: 24px;
+    z-index: 999999;
+    background: rgba(14, 14, 14, 0.85);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 20px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 14px;
+    font-family: Inter, -apple-system, sans-serif;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5), 0 0 0 0.5px rgba(255, 255, 255, 0.05);
+    cursor: pointer;
+    user-select: none;
+    transition: transform 0.2s ease, background 0.2s ease, border-color 0.2s ease;
+  `;
+
+  container.addEventListener('mouseenter', () => {
+    container.style.transform = 'scale(1.04)';
+    container.style.borderColor = 'rgba(255, 255, 255, 0.16)';
+  });
+  container.addEventListener('mouseleave', () => {
+    container.style.transform = 'scale(1)';
+    container.style.borderColor = 'rgba(255, 255, 255, 0.08)';
+  });
+
+  const label = document.createElement('span');
+  label.id = 'hearly-indicator-label';
+  label.style.cssText = `
+    color: #F0F0F0;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: -0.1px;
+    transition: color 0.3s ease;
+  `;
+  container.appendChild(label);
+
+  const dot = document.createElement('div');
+  dot.id = 'hearly-indicator-dot';
+  dot.style.cssText = `
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    transition: background 0.3s ease;
+  `;
+  container.appendChild(dot);
+
+  const updateState = (isActive: boolean) => {
+    if (isActive) {
+      label.innerText = 'Hearly ON';
+      label.style.color = '#F0F0F0';
+      dot.style.background = '#B5F03D';
+      dot.style.boxShadow = 'none';
+    } else {
+      label.innerText = 'Hearly OFF';
+      label.style.color = '#9CA3AF';
+      dot.style.background = '#EF4444';
+      dot.style.boxShadow = 'none';
+    }
+  };
+
+  container.addEventListener('click', () => {
+    chrome.storage.local.get('hearly_filter', (result: EnrollmentStorageResult) => {
+      const active = result.hearly_filter?.isActive === true;
+      if (!active) {
+        chrome.storage.local.set({ hearly_filter: { isActive: true } }, () => {
+          chrome.runtime.sendMessage({ type: 'HEARLY_TOGGLE' });
+          window.postMessage({
+            source: 'hearly-content',
+            type: 'FILTER_STATE_CHANGED',
+            active: true
+          }, window.location.origin);
+          updateState(true);
+        });
+      }
+    });
+  });
+
+  chrome.storage.local.get('hearly_filter', (result: EnrollmentStorageResult) => {
+    updateState(result.hearly_filter?.isActive === true);
+  });
+
+  chrome.storage.onChanged.addListener((changes) => {
+    if (changes.hearly_filter) {
+      updateState(changes.hearly_filter.newValue?.isActive === true);
+    }
+  });
+
+  const appendToBody = () => {
+    if (document.body) {
+      document.body.appendChild(container);
+    } else {
+      setTimeout(appendToBody, 100);
+    }
+  };
+  appendToBody();
+}
+
+injectHearlyIndicator();
