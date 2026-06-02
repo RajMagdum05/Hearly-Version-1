@@ -5,6 +5,7 @@ import { Phase1_Intro } from './Phase1_Intro';
 import { Phase2_Record } from './Phase2_Record';
 import { Phase3_Done } from './Phase3_Done';
 import { saveEnrollmentState } from '../../services/storageService';
+import type { SpeakerModelStatus } from '@/ai/localSpeakerModel';
 
 /** Must match extension popup shell; avoid fixed positioning inside MV3 popup documents. */
 const POPUP_W = 'w-[380px]';
@@ -20,7 +21,16 @@ const secondaryButtonClass =
 
 export interface EnrollmentFlowProps {
   onClose: () => void;
+<<<<<<< HEAD
   onComplete: (name: string, embedding: Float32Array) => void;
+=======
+  onComplete: (
+    name: string,
+    embedding: Float32Array,
+    embeddingModel: SpeakerModelStatus,
+    cloudProfileId?: string,
+  ) => void;
+>>>>>>> f1a7ad3baa439457d50f8980f84bf68ae8dedbc2
 }
 
 function StepHeader({ step }: { step: number }) {
@@ -49,15 +59,32 @@ export function EnrollmentFlow({ onClose, onComplete }: EnrollmentFlowProps) {
   const [isRecording, setIsRecording] = useState(false);
   const [hasRecording, setHasRecording] = useState(false);
   const [voiceEmbedding, setVoiceEmbedding] = useState<Float32Array | null>(null);
+<<<<<<< HEAD
 
   const handleTrainingComplete = useCallback((embedding: Float32Array, _audio: Blob[]) => {
     setVoiceEmbedding(embedding);
+=======
+  const [embeddingModel, setEmbeddingModel] = useState<SpeakerModelStatus>('fallback');
+  const [cloudProfileId, setCloudProfileId] = useState<string | undefined>();
+  const handleTrainingComplete = useCallback((
+    embedding: Float32Array,
+    audio: Blob[],
+    modelStatus: SpeakerModelStatus,
+  ) => {
+    setVoiceEmbedding(embedding);
+    setEmbeddingModel(modelStatus);
+    void audio;
+>>>>>>> f1a7ad3baa439457d50f8980f84bf68ae8dedbc2
     setHasRecording(true);
     setIsRecording(false);
   }, []);
 
   const trainVoice = () => {
     if (!voiceEmbedding) return;
+<<<<<<< HEAD
+=======
+    setCloudProfileId(undefined);
+>>>>>>> f1a7ad3baa439457d50f8980f84bf68ae8dedbc2
     setStep(2);
   };
 
@@ -136,6 +163,11 @@ export function EnrollmentFlow({ onClose, onComplete }: EnrollmentFlowProps) {
                       }
                       setHasRecording(false);
                       setVoiceEmbedding(null);
+<<<<<<< HEAD
+=======
+                      setEmbeddingModel('fallback');
+                      setCloudProfileId(undefined);
+>>>>>>> f1a7ad3baa439457d50f8980f84bf68ae8dedbc2
                       return true;
                     });
                   }}
@@ -181,7 +213,11 @@ export function EnrollmentFlow({ onClose, onComplete }: EnrollmentFlowProps) {
                 disabled={!voiceEmbedding}
                 onClick={() => {
                   if (!voiceEmbedding) return;
+<<<<<<< HEAD
                   onComplete(name, voiceEmbedding);
+=======
+                  onComplete(name, voiceEmbedding, embeddingModel, cloudProfileId);
+>>>>>>> f1a7ad3baa439457d50f8980f84bf68ae8dedbc2
                   saveEnrollmentState({ isEnrolled: true, userName: name });
                 }}
               >

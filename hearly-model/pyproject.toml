@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hearly-model"
+version = "0.1.0"
+description = "Local speaker verification training and ONNX export tools for Hearly"
+requires-python = ">=3.10"
+dependencies = [
+  "numpy>=1.26",
+  "soundfile>=0.12",
+  "torch>=2.2",
+  "torchaudio>=2.2",
+  "onnx>=1.15",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]

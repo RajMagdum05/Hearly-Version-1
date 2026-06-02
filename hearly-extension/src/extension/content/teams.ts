@@ -1,8 +1,12 @@
+<<<<<<< HEAD
 import { HearlyMessage } from '../messages'
 import { StreamingRecorder } from '../../audio/streamingRecorder'
 import { loadVoiceProfile } from '../../services/storageService'
 import { SPEAKER_SIMILARITY_THRESHOLD } from '../../config/constants'
 import { showHearlySubtitle } from './subtitleOverlay'
+=======
+import type { HearlyMessage } from '../messages'
+>>>>>>> f1a7ad3baa439457d50f8980f84bf68ae8dedbc2
 
 type EnrollmentStorageResult = {
   hearly_enrollment?: {
@@ -14,12 +18,102 @@ type EnrollmentStorageResult = {
   hearly_voice_profile?: {
     embedding?: number[]
   }
+  hearly_voice_runtime_profile?: {
+    embedding?: number[]
+    embeddingModel?: 'fallback' | 'onnx-ready'
+  }
   hearly_transcript?: {
     isEnabled?: boolean
   }
 }
 
 const PLATFORM = 'teams'
+let runtimeVerificationInFlight = false
+let runtimeEmbeddingModel: 'fallback' | 'onnx-ready' = 'fallback'
+let onnxUnavailableNotified = false
+
+async function decodeAudioBase64ToPcm(base64: string): Promise<{ samples: number[]; sampleRate: number } | null> {
+  try {
+    const binary = atob(base64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i += 1) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+    const blob = new Blob([bytes], { type: 'audio/webm' });
+    const context = new AudioContext();
+    try {
+      const buffer = await context.decodeAudioData((await blob.arrayBuffer()).slice(0));
+      const mixed = new Float32Array(buffer.length);
+      for (let channel = 0; channel < buffer.numberOfChannels; channel += 1) {
+        const channelData = buffer.getChannelData(channel);
+        for (let i = 0; i < channelData.length; i += 1) {
+          mixed[i] += (channelData[i] ?? 0) / buffer.numberOfChannels;
+        }
+      }
+      return { samples: Array.from(mixed), sampleRate: buffer.sampleRate };
+    } finally {
+      await context.close();
+    }
+  } catch (error) {
+    console.warn('[Hearly] Failed to decode transcript audio chunk:', error);
+    return null;
+  }
+}
+
+class LocalChunkRecorder {
+  private recorder: MediaRecorder | null = null
+  private timer: number | null = null
+  private chunks: Blob[] = []
+
+  constructor(
+    private readonly stream: MediaStream,
+    private readonly speaker: 'you' | 'others',
+    private readonly onChunk: (chunkBase64: string, timestamp: number, speaker: 'you' | 'others') => void,
+  ) {}
+
+  start() {
+    if (this.recorder) return
+    this.startWindow()
+    this.timer = window.setInterval(() => this.startWindow(), 4000)
+  }
+
+  private startWindow() {
+    if (this.recorder?.state === 'recording') {
+      this.recorder.stop()
+    }
+    this.chunks = []
+    const timestamp = Date.now()
+    this.recorder = new MediaRecorder(this.stream)
+    this.recorder.ondataavailable = (event) => {
+      if (event.data.size > 0) this.chunks.push(event.data)
+    }
+    this.recorder.onstop = () => {
+      const blob = new Blob(this.chunks, { type: 'audio/webm' })
+      if (blob.size === 0) return
+      const reader = new FileReader()
+      reader.onloadend = () => {
+        const base64 = String(reader.result).split(',')[1]
+        if (base64) this.onChunk(base64, timestamp, this.speaker)
+      }
+      reader.readAsDataURL(blob)
+    }
+    this.recorder.start()
+    window.setTimeout(() => {
+      if (this.recorder?.state === 'recording') this.recorder.stop()
+    }, 3900)
+  }
+
+  stop() {
+    if (this.timer) {
+      window.clearInterval(this.timer)
+      this.timer = null
+    }
+    if (this.recorder?.state === 'recording') {
+      this.recorder.stop()
+    }
+    this.recorder = null
+  }
+}
 
 function installMicBridge() {
   window.addEventListener('message', (event) => {
@@ -31,22 +125,43 @@ function installMicBridge() {
       platform?: string
       score?: number
       matched?: boolean
+      isSpeech?: boolean
+      confidence?: number
+      rms?: number
+      noiseFloor?: number
       error?: string
       audioBase64?: string
+      samplesBuffer?: ArrayBuffer
+      sampleRate?: number
+      vadConfidence?: number
       timestamp?: number
     }
     if (data?.source !== 'hearly-page') return
 
     if (data.type === 'GET_MIC_STATE' && data.requestId) {
+<<<<<<< HEAD
       chrome.storage.local.get(['hearly_filter', 'hearly_transcript'], async (result: EnrollmentStorageResult) => {
         const profile = await loadVoiceProfile()
+=======
+      chrome.storage.local.get(['hearly_filter', 'hearly_voice_runtime_profile', 'hearly_transcript'], (result: EnrollmentStorageResult) => {
+        runtimeEmbeddingModel = result.hearly_voice_runtime_profile?.embeddingModel ?? 'fallback'
+>>>>>>> f1a7ad3baa439457d50f8980f84bf68ae8dedbc2
         window.postMessage({
           source: 'hearly-content',
           type: 'MIC_STATE',
           requestId: data.requestId,
           enabled: result.hearly_filter?.isActive === true,
+<<<<<<< HEAD
           embedding: profile?.embedding ? Array.from(profile.embedding) : null,
           threshold: SPEAKER_SIMILARITY_THRESHOLD,
+=======
+          embedding:
+            (result.hearly_voice_runtime_profile?.embeddingModel ?? 'fallback') === 'fallback'
+              ? result.hearly_voice_runtime_profile?.embedding ?? null
+              : null,
+          embeddingModel: result.hearly_voice_runtime_profile?.embeddingModel ?? 'fallback',
+          threshold: 0.58,
+>>>>>>> f1a7ad3baa439457d50f8980f84bf68ae8dedbc2
           workletUrl: chrome.runtime.getURL('hearly-processor.js'),
           transcriptionEnabled: result.hearly_transcript?.isEnabled === true,
         }, window.location.origin)
@@ -54,13 +169,62 @@ function installMicBridge() {
       return
     }
 
-    if (data.type === 'NEW_MIC_CHUNK' && data.audioBase64) {
+    if (data.type === 'VOICE_WINDOW' && data.samplesBuffer) {
+      if (runtimeEmbeddingModel !== 'onnx-ready') return
+      if (runtimeVerificationInFlight) return
+      runtimeVerificationInFlight = true
       chrome.runtime.sendMessage({
-        type: 'HEARLY_TRANSCRIBE_CHUNK',
-        audioBase64: data.audioBase64,
-        speaker: 'you',
-        timestamp: data.timestamp ?? Date.now(),
+        type: 'HEARLY_VERIFY_VOICE_WINDOW',
+        samples: Array.from(new Float32Array(data.samplesBuffer)),
+        sampleRate: data.sampleRate ?? 48000,
+        threshold: 0.58,
+        vadConfidence: data.vadConfidence,
+      }, (response?: { matched?: boolean; score?: number; unavailable?: boolean }) => {
+        runtimeVerificationInFlight = false
+        if (chrome.runtime.lastError || !response) return
+        if (response.unavailable) {
+          if (!onnxUnavailableNotified) {
+            onnxUnavailableNotified = true
+            chrome.runtime.sendMessage({
+              type: 'HEARLY_MIC_PROCESSING_ERROR',
+              platform: data.platform ?? PLATFORM,
+              error: 'Local ONNX speaker model unavailable. Export hearly-speaker-v1.onnx and reload extension.',
+            } as HearlyMessage)
+          }
+          return
+        }
+        onnxUnavailableNotified = false
+        window.postMessage({
+          source: 'hearly-content',
+          type: 'VOICE_MATCH_DECISION',
+            matched: response.matched === true,
+            score: response.score ?? 0,
+            vadConfidence: data.vadConfidence,
+          }, window.location.origin)
+
+          chrome.runtime.sendMessage({
+            type: 'HEARLY_VOICE_MATCH',
+            platform: data.platform ?? PLATFORM,
+            score: response.score ?? 0,
+            matched: response.matched === true,
+          } as HearlyMessage)
       })
+      return
+    }
+
+    if (data.type === 'NEW_MIC_CHUNK' && data.audioBase64) {
+      void (async () => {
+        const decoded = await decodeAudioBase64ToPcm(data.audioBase64!);
+        if (!decoded) return;
+        chrome.runtime.sendMessage({
+          type: 'HEARLY_TRANSCRIBE_CHUNK',
+          audioBase64: data.audioBase64,
+          samples: decoded.samples,
+          sampleRate: decoded.sampleRate,
+          speaker: 'you',
+          timestamp: data.timestamp ?? Date.now(),
+        })
+      })()
       return
     }
 
@@ -69,6 +233,7 @@ function installMicBridge() {
       MIC_PROCESSING_STOPPED: 'HEARLY_MIC_PROCESSING_STOPPED',
       MIC_PROCESSING_ERROR: 'HEARLY_MIC_PROCESSING_ERROR',
       VOICE_MATCH: 'HEARLY_VOICE_MATCH',
+      VOICE_ACTIVITY: 'HEARLY_VOICE_ACTIVITY',
     }
     const type = data.type ? map[data.type] : undefined
     if (type) {
@@ -77,6 +242,10 @@ function installMicBridge() {
         platform: data.platform ?? PLATFORM,
         score: data.score,
         matched: data.matched,
+        isSpeech: data.isSpeech,
+        confidence: data.confidence,
+        rms: data.rms,
+        noiseFloor: data.noiseFloor,
         error: data.error,
       } as HearlyMessage)
     }
@@ -369,17 +538,36 @@ init()
 let audioContext: AudioContext | null = null
 let mediaStream: MediaStream | null = null
 let sourceNode: MediaStreamAudioSourceNode | null = null
-let streamingRecorder: StreamingRecorder | null = null
+let streamingRecorder: LocalChunkRecorder | null = null
 
 function startTranscriptionRecorder(stream: MediaStream) {
   if (streamingRecorder) return
   console.log('[Hearly] Starting transcription recorder...')
+<<<<<<< HEAD
   streamingRecorder = new StreamingRecorder(stream, 'others', (chunkBase64, timestamp) => {
     chrome.runtime.sendMessage({
       type: 'HEARLY_TRANSCRIBE_CHUNK',
       audioBase64: chunkBase64,
       speaker: 'others',
       timestamp,
+=======
+  chrome.storage.local.get('hearly_app_settings', (settingsResult: any) => {
+    const language = settingsResult.hearly_app_settings?.language ?? 'en'
+    streamingRecorder = new LocalChunkRecorder(stream, 'others', (chunkBase64, timestamp) => {
+      void (async () => {
+        const decoded = await decodeAudioBase64ToPcm(chunkBase64);
+        if (!decoded) return;
+        chrome.runtime.sendMessage({
+          type: 'HEARLY_TRANSCRIBE_CHUNK',
+          audioBase64: chunkBase64,
+          samples: decoded.samples,
+          sampleRate: decoded.sampleRate,
+          language,
+          speaker: 'others',
+          timestamp,
+        })
+      })()
+>>>>>>> f1a7ad3baa439457d50f8980f84bf68ae8dedbc2
     })
   })
   streamingRecorder.start()

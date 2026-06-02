@@ -1,8 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import {
-  averageFingerprints,
-  extractVoiceFingerprintFromBlob,
-} from '@/audio/voiceFingerprint';
+import { embedEnrollmentAudio, type SpeakerModelStatus } from '@/ai/localSpeakerModel';
 import { IconCheck, IconMic } from '@/ui/shared/icons';
 
 type SpeechRecognitionResultLike = {
@@ -44,7 +41,11 @@ export interface Phase2_RecordProps {
   isRecording: boolean;
   hasRecording: boolean;
   onToggleRecord: () => void;
-  onTrainingComplete: (embedding: Float32Array, phraseAudio: Blob[]) => void;
+  onTrainingComplete: (
+    embedding: Float32Array,
+    phraseAudio: Blob[],
+    modelStatus: SpeakerModelStatus,
+  ) => void;
 }
 
 const WAVE_HEIGHTS = [14, 18, 13, 22, 16, 28, 18, 34, 20, 30, 17, 26, 15, 22, 13, 18] as const;
@@ -212,8 +213,11 @@ export function Phase2_Record({
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   const phraseAudioRef = useRef<Blob[]>([]);
+<<<<<<< HEAD
   const fingerprintsRef = useRef<Float32Array[]>([]);
   const activeWordRef = useRef(0);
+=======
+>>>>>>> f1a7ad3baa439457d50f8980f84bf68ae8dedbc2
 
   const completedWordsBeforeActive = phraseWords
     .slice(0, activePhrase)
@@ -330,6 +334,7 @@ export function Phase2_Record({
     mediaStreamRef.current = null;
 
     try {
+<<<<<<< HEAD
       console.info('[Hearly Enrollment] Generating fingerprint for completed phrase sample.');
       const fingerprint = await extractVoiceFingerprintFromBlob(blob);
       phraseAudioRef.current.push(blob);
@@ -338,6 +343,10 @@ export function Phase2_Record({
         `[Hearly Enrollment] Fingerprint generated: ${fingerprint.length} dimensions; sample ${fingerprintsRef.current.length}/${phrases.length}.`,
       );
       return fingerprint;
+=======
+      phraseAudioRef.current.push(blob);
+      return blob;
+>>>>>>> f1a7ad3baa439457d50f8980f84bf68ae8dedbc2
     } catch {
       setRecordingError('Could not read that voice sample. Please try again.');
       return null;
@@ -347,21 +356,28 @@ export function Phase2_Record({
   };
 
   const completePhrase = async () => {
-    const fingerprint = await finishPhraseCapture();
-    if (!fingerprint) {
+    const phraseBlob = await finishPhraseCapture();
+    if (!phraseBlob) {
       onToggleRecord();
       return;
     }
 
     if (isFinalPhrase && !completeNotifiedRef.current) {
       completeNotifiedRef.current = true;
+<<<<<<< HEAD
       const averagedFingerprint = averageFingerprints(fingerprintsRef.current);
       console.info(
         `[Hearly Enrollment] Averaged ${fingerprintsRef.current.length} fingerprints into enrolled voiceprint with ${averagedFingerprint.length} dimensions.`,
       );
       onTrainingComplete(
         averagedFingerprint,
+=======
+      const { embedding, modelStatus } = await embedEnrollmentAudio(phraseAudioRef.current);
+      onTrainingComplete(
+        embedding,
+>>>>>>> f1a7ad3baa439457d50f8980f84bf68ae8dedbc2
         [...phraseAudioRef.current],
+        modelStatus,
       );
       return;
     }
@@ -502,7 +518,6 @@ export function Phase2_Record({
       setActiveWord(0);
       activeWordRef.current = 0;
       setPhraseReadyNext(false);
-      fingerprintsRef.current = [];
       phraseAudioRef.current = [];
     }
 

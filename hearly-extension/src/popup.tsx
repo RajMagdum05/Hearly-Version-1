@@ -23,19 +23,36 @@ type AudioStatus = {
   error: string | null;
   voiceScore: number | null;
   voiceMatched: boolean | null;
+  speechActive: boolean | null;
+  speechConfidence: number | null;
 };
+
+function safeRuntimeMessage(message: Record<string, unknown>) {
+  if (typeof chrome === 'undefined' || !chrome.runtime?.sendMessage) return;
+  chrome.runtime.sendMessage(message, () => {
+    void chrome.runtime.lastError;
+  });
+}
+
+function safeTabMessage(tabId: number, message: Record<string, unknown>) {
+  if (typeof chrome === 'undefined' || !chrome.tabs?.sendMessage) return;
+  chrome.tabs.sendMessage(tabId, message, () => {
+    void chrome.runtime.lastError;
+  });
+}
 
 function PopupApp() {
   const [tab, setTab] = useState<PopupTabId>('home');
   const [roadmapOpen, setRoadmapOpen] = useState(false);
   const [enrollmentOpen, setEnrollmentOpen] = useState(false);
-  const [assistantSuggestion, setAssistantSuggestion] = useState<string>('');
   const [audioStatus, setAudioStatus] = useState<AudioStatus>({
     capturing: false,
     platform: null,
     error: null,
     voiceScore: null,
     voiceMatched: null,
+    speechActive: null,
+    speechConfidence: null,
   });
 
   const isEnrolled = useEnrollmentStore((s) => s.isEnrolled);
@@ -91,14 +108,6 @@ function PopupApp() {
         transcriptActions.setEntries(savedEntries);
       }
     });
-
-    if (typeof chrome !== 'undefined' && chrome.storage?.local) {
-      chrome.storage.local.get('hearly_assistant_suggestion', (result) => {
-        if (result.hearly_assistant_suggestion) {
-          setAssistantSuggestion(String(result.hearly_assistant_suggestion));
-        }
-      });
-    }
   }, [enrollmentActions, setEnrolled, setPhase, setFilterActive, setTranscriptEnabled, transcriptActions]);
 
   useEffect(() => {
@@ -110,8 +119,9 @@ function PopupApp() {
       error?: string;
       score?: number;
       matched?: boolean;
+      isSpeech?: boolean;
+      confidence?: number;
       entry?: any;
-      suggestion?: string;
     }) => {
       if (message.type === 'HEARLY_AUDIO_STARTED') {
         setAudioStatus({
@@ -120,6 +130,8 @@ function PopupApp() {
           error: null,
           voiceScore: null,
           voiceMatched: null,
+          speechActive: null,
+          speechConfidence: null,
         });
       }
 
@@ -130,6 +142,8 @@ function PopupApp() {
           error: null,
           voiceScore: current.voiceScore,
           voiceMatched: current.voiceMatched,
+          speechActive: current.speechActive,
+          speechConfidence: current.speechConfidence,
         }));
       }
 
@@ -140,6 +154,8 @@ function PopupApp() {
           error: message.error ?? 'Could not start meeting audio.',
           voiceScore: null,
           voiceMatched: null,
+          speechActive: null,
+          speechConfidence: null,
         });
         filterActions.setActive(false);
         saveFilterState(false);
@@ -152,6 +168,8 @@ function PopupApp() {
           error: null,
           voiceScore: null,
           voiceMatched: null,
+          speechActive: null,
+          speechConfidence: null,
         });
       }
 
@@ -162,6 +180,8 @@ function PopupApp() {
           error: null,
           voiceScore: current.voiceScore,
           voiceMatched: current.voiceMatched,
+          speechActive: current.speechActive,
+          speechConfidence: current.speechConfidence,
         }));
       }
 
@@ -172,6 +192,8 @@ function PopupApp() {
           error: message.error ?? 'Could not process microphone audio.',
           voiceScore: null,
           voiceMatched: null,
+          speechActive: null,
+          speechConfidence: null,
         });
       }
 
@@ -184,12 +206,17 @@ function PopupApp() {
         }));
       }
 
-      if (message.type === 'HEARLY_NEW_TRANSCRIPT_ENTRY' && message.entry) {
-        transcriptActions.addEntry(message.entry);
+      if (message.type === 'HEARLY_VOICE_ACTIVITY') {
+        setAudioStatus((current) => ({
+          ...current,
+          platform: message.platform ?? current.platform,
+          speechActive: message.isSpeech ?? current.speechActive,
+          speechConfidence: message.confidence ?? current.speechConfidence,
+        }));
       }
 
-      if (message.type === 'HEARLY_ASSISTANT_SUGGESTION' && message.suggestion) {
-        setAssistantSuggestion(message.suggestion);
+      if (message.type === 'HEARLY_NEW_TRANSCRIPT_ENTRY' && message.entry) {
+        transcriptActions.addEntry(message.entry);
       }
     };
 
@@ -205,7 +232,7 @@ function PopupApp() {
         capturing: false,
         error: null,
       }));
-      chrome.runtime.sendMessage({ type: 'POPUP_TOGGLE_AUDIO_OFF' });
+      safeRuntimeMessage({ type: 'POPUP_TOGGLE_AUDIO_OFF' });
       return;
     }
 
@@ -250,7 +277,7 @@ function PopupApp() {
             }));
             return;
           }
-          chrome.runtime.sendMessage({
+          safeRuntimeMessage({
             type: 'POPUP_TOGGLE_AUDIO_ON',
             streamId,
             tabId: meetingTabId
@@ -276,11 +303,16 @@ function PopupApp() {
     return (
       <EnrollmentFlow
         onClose={() => setEnrollmentOpen(false)}
+<<<<<<< HEAD
         onComplete={(name, embedding) => {
+=======
+        onComplete={(name, embedding, embeddingModel, cloudProfileId) => {
+>>>>>>> f1a7ad3baa439457d50f8980f84bf68ae8dedbc2
           const profile = {
             id: crypto.randomUUID(),
             userName: name,
             embedding,
+            embeddingModel,
             enrolledAt: Date.now(),
             isActive: true,
           };
@@ -335,6 +367,8 @@ function PopupApp() {
                   audioError={audioStatus.error}
                   voiceScore={audioStatus.voiceScore}
                   voiceMatched={audioStatus.voiceMatched}
+                  speechActive={audioStatus.speechActive}
+                  speechConfidence={audioStatus.speechConfidence}
                 />
                 <div className="flex shrink-0 flex-col">
                   <div className="rounded-2xl border border-white/[0.07] bg-white/[0.025] p-2.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.045)]">
@@ -349,7 +383,7 @@ function PopupApp() {
                         chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
                           const tab = tabs[0];
                           if (tab?.id) {
-                            chrome.tabs.sendMessage(tab.id, { type: 'HEARLY_FILTER_STATE_CHANGED' });
+                            safeTabMessage(tab.id, { type: 'HEARLY_FILTER_STATE_CHANGED' });
                           }
                         });
                       }}
@@ -368,7 +402,7 @@ function PopupApp() {
                         chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
                           const tab = tabs[0];
                           if (tab?.id) {
-                            chrome.tabs.sendMessage(tab.id, { type: 'HEARLY_TRANSCRIPT_STATE_CHANGED' });
+                            safeTabMessage(tab.id, { type: 'HEARLY_TRANSCRIPT_STATE_CHANGED' });
                           }
                         });
                       }}
@@ -376,29 +410,16 @@ function PopupApp() {
                     />
                   </div>
 
-                  {transcriptEnabled && (
-                    <div className="mt-3 flex flex-col gap-2 rounded-2xl border border-purple-500/25 bg-purple-500/[0.03] p-3.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.02)] transition-all duration-500 animate-in fade-in slide-in-from-bottom-2">
-                      <div className="flex items-center gap-2">
-                        <div className="relative flex h-2 w-2">
-                          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-purple-400 opacity-75"></span>
-                          <span className="relative inline-flex rounded-full h-2 w-2 bg-purple-500"></span>
-                        </div>
-                        <p className="text-[10px] font-bold uppercase tracking-[0.15em] text-purple-300">
-                          Hearly AI Assistant
-                        </p>
-                      </div>
-                      
-                      <div className="mt-1 text-[11px] font-normal leading-relaxed text-hearly-secondary select-text whitespace-pre-line text-left">
-                        {assistantSuggestion ? (
-                          assistantSuggestion
-                        ) : (
-                          <span className="italic text-hearly-tertiary">
-                            Listening to meeting content to generate smart summary & actions...
-                          </span>
-                        )}
-                      </div>
+                  {transcriptEnabled && latestEntry ? (
+                    <div className="mt-3 rounded-2xl border border-white/[0.07] bg-white/[0.025] p-3.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]">
+                      <p className="text-[10px] font-bold uppercase tracking-[0.15em] text-hearly-tertiary">
+                        Latest transcript
+                      </p>
+                      <p className="mt-1 line-clamp-3 text-left text-[11px] font-normal leading-relaxed text-hearly-secondary">
+                        {latestEntry.text}
+                      </p>
                     </div>
-                  )}
+                  ) : null}
                 </div>
               </>
             )}

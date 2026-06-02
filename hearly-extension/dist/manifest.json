@@ -1,7 +1,7 @@
 {
   "name": "Hearly",
   "version": "1.0.0",
-  "description": "AI-powered voice focus tool for meetings",
+  "description": "Local voice focus and transcript tool for meetings",
   "manifest_version": 3,
   "icons": {
     "16": "icons/icon-16.png",
@@ -67,7 +67,6 @@
   ],
   "permissions": [
     "storage",
-    "tabs",
     "tabCapture",
     "activeTab",
     "scripting"
@@ -77,8 +76,7 @@
     "https://zoom.us/*",
     "https://app.zoom.us/*",
     "https://teams.microsoft.com/*",
-    "https://teams.live.com/*",
-    "http://localhost:8787/*"
+    "https://teams.live.com/*"
   ],
   "web_accessible_resources": [
     {

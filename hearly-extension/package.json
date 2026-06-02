@@ -1,7 +1,7 @@
 {
   "name": "hearly-extension",
   "version": "1.0.0",
-  "description": "Hearly — AI-powered voice focus tool for meetings",
+  "description": "Hearly — local voice focus and transcript tool for meetings",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -9,12 +9,12 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "onnxruntime-web": "^1.26.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "zustand": "^5.0.13"
   },
   "devDependencies": {
-    "@crxjs/vite-plugin": "^1.0.14",
     "@types/chrome": "^0.1.42",
     "@types/node": "^25.8.0",
     "@types/react": "^18.2.0",

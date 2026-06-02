@@ -14,6 +14,7 @@ export async function loadVoiceProfile(): Promise<VoiceProfile | null> {
 
   return {
     ...profile,
+    embeddingModel: profile.embeddingModel ?? 'fallback',
     embedding:
       profile.embedding instanceof Float32Array
         ? profile.embedding
@@ -26,6 +27,15 @@ export async function saveVoiceProfile(profile: VoiceProfile): Promise<void> {
   await EncryptedLocalStorage.encryptAndSet(STORAGE_KEYS.voiceProfile, {
     ...profile,
     embedding: Array.from(profile.embedding),
+  });
+  await chrome.storage.local.set({
+    hearly_voice_runtime_profile: {
+      id: profile.id,
+      userName: profile.userName,
+      embedding: Array.from(profile.embedding),
+      embeddingModel: profile.embeddingModel,
+      enrolledAt: profile.enrolledAt,
+    },
   });
 }
 
@@ -73,6 +83,7 @@ export async function clearEnrollmentState(): Promise<void> {
         'hearly_filter',
         'hearly_transcript',
         'hearly_voice_profile',
+        'hearly_voice_runtime_profile',
         'hearly_app_settings',
         'hearly_transcript_meta',
         'hearly_transcript_entries'
