@@ -21,16 +21,12 @@ const secondaryButtonClass =
 
 export interface EnrollmentFlowProps {
   onClose: () => void;
-<<<<<<< HEAD
-  onComplete: (name: string, embedding: Float32Array) => void;
-=======
-  onComplete: (
+onComplete: (
     name: string,
     embedding: Float32Array,
     embeddingModel: SpeakerModelStatus,
     cloudProfileId?: string,
   ) => void;
->>>>>>> f1a7ad3baa439457d50f8980f84bf68ae8dedbc2
 }
 
 function StepHeader({ step }: { step: number }) {
@@ -59,11 +55,6 @@ export function EnrollmentFlow({ onClose, onComplete }: EnrollmentFlowProps) {
   const [isRecording, setIsRecording] = useState(false);
   const [hasRecording, setHasRecording] = useState(false);
   const [voiceEmbedding, setVoiceEmbedding] = useState<Float32Array | null>(null);
-<<<<<<< HEAD
-
-  const handleTrainingComplete = useCallback((embedding: Float32Array, _audio: Blob[]) => {
-    setVoiceEmbedding(embedding);
-=======
   const [embeddingModel, setEmbeddingModel] = useState<SpeakerModelStatus>('fallback');
   const [cloudProfileId, setCloudProfileId] = useState<string | undefined>();
   const handleTrainingComplete = useCallback((
@@ -74,17 +65,13 @@ export function EnrollmentFlow({ onClose, onComplete }: EnrollmentFlowProps) {
     setVoiceEmbedding(embedding);
     setEmbeddingModel(modelStatus);
     void audio;
->>>>>>> f1a7ad3baa439457d50f8980f84bf68ae8dedbc2
     setHasRecording(true);
     setIsRecording(false);
   }, []);
 
   const trainVoice = () => {
     if (!voiceEmbedding) return;
-<<<<<<< HEAD
-=======
     setCloudProfileId(undefined);
->>>>>>> f1a7ad3baa439457d50f8980f84bf68ae8dedbc2
     setStep(2);
   };
 
@@ -163,11 +150,8 @@ export function EnrollmentFlow({ onClose, onComplete }: EnrollmentFlowProps) {
                       }
                       setHasRecording(false);
                       setVoiceEmbedding(null);
-<<<<<<< HEAD
-=======
                       setEmbeddingModel('fallback');
                       setCloudProfileId(undefined);
->>>>>>> f1a7ad3baa439457d50f8980f84bf68ae8dedbc2
                       return true;
                     });
                   }}
