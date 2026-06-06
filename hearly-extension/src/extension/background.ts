@@ -4,6 +4,54 @@ import { transcribePcmWithOnnx } from '@/ai/localSttModel';
 import type { TranscriptEntry } from '@/utils/types';
 import { TranscriptMerger } from '@/audio/transcriptMerger';
 import { loadTranscriptEntries, saveTranscriptEntries } from '@/services/storageService';
+import { isCloudConfigured, transcribeAudioInCloud } from '@/services/cloudService';
+
+function encodeWav(samples: Float32Array, sampleRate: number): Blob {
+  const buffer = new ArrayBuffer(44 + samples.length * 2);
+  const view = new DataView(buffer);
+
+  const writeString = (v: DataView, offset: number, string: string) => {
+    for (let i = 0; i < string.length; i++) {
+      v.setUint8(offset + i, string.charCodeAt(i));
+    }
+  };
+
+  /* RIFF identifier */
+  writeString(view, 0, 'RIFF');
+  /* file length */
+  view.setUint32(4, 36 + samples.length * 2, true);
+  /* RIFF type */
+  writeString(view, 8, 'WAVE');
+  /* format chunk identifier */
+  writeString(view, 12, 'fmt ');
+  /* format chunk length */
+  view.setUint32(16, 16, true);
+  /* sample format (raw) */
+  view.setUint16(20, 1, true);
+  /* channel count */
+  view.setUint16(22, 1, true);
+  /* sample rate */
+  view.setUint32(24, sampleRate, true);
+  /* byte rate (sample rate * block align) */
+  view.setUint32(28, sampleRate * 2, true);
+  /* block align (channel count * bytes per sample) */
+  view.setUint16(32, 2, true);
+  /* bits per sample */
+  view.setUint16(34, 16, true);
+  /* data chunk identifier */
+  writeString(view, 36, 'data');
+  /* data chunk length */
+  view.setUint32(40, samples.length * 2, true);
+
+  // Write PCM audio samples
+  let offset = 44;
+  for (let i = 0; i < samples.length; i++, offset += 2) {
+    const s = Math.max(-1, Math.min(1, samples[i] ?? 0));
+    view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+  }
+
+  return new Blob([buffer], { type: 'audio/wav' });
+}
 
 let meetingStatus: MeetingStatus = {
   isInMeeting: false,
@@ -179,20 +227,44 @@ function handleMessage(message: HearlyMessage, _sender: chrome.runtime.MessageSe
     }
 
     void (async () => {
-      const result = await transcribePcmWithOnnx(new Float32Array(samples), sampleRate);
-      if (result.unavailable) {
+      let transcriptionText = '';
+      let isUnavailable = false;
+
+      // 1. Try local STT first
+      const localResult = await transcribePcmWithOnnx(new Float32Array(samples), sampleRate);
+      if (!localResult.unavailable) {
+        transcriptionText = localResult.text;
+      } else {
+        // 2. Fall back to cloud STT if configured
+        if (isCloudConfigured()) {
+          try {
+            const wavBlob = encodeWav(new Float32Array(samples), sampleRate);
+            const cloudResult = await transcribeAudioInCloud({ audio: wavBlob, language });
+            if (cloudResult && cloudResult.text) {
+              transcriptionText = cloudResult.text;
+            }
+          } catch (error) {
+            console.error('[Hearly] Cloud transcription failed:', error);
+            isUnavailable = true;
+          }
+        } else {
+          isUnavailable = true;
+        }
+      }
+
+      if (isUnavailable) {
         if (!sttUnavailableNotified) {
           sttUnavailableNotified = true;
           chrome.runtime.sendMessage({
             type: 'HEARLY_MIC_PROCESSING_ERROR',
-            error: 'Local STT model unavailable. Export hearly-stt-wav2vec2.onnx and hearly-stt-vocab.json, then reload extension.',
+            error: 'Transcription service unavailable. Set up local STT model or configure VITE_HEARLY_API_BASE_URL for cloud transcription.',
           } as HearlyMessage);
         }
         return;
       }
 
       sttUnavailableNotified = false;
-      const trimmed = result.text.trim();
+      const trimmed = transcriptionText.trim();
       if (!trimmed) return;
 
       const merger = speaker === 'you' ? youMerger : othersMerger;

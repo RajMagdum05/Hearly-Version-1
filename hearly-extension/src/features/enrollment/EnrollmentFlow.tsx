@@ -21,7 +21,7 @@ const secondaryButtonClass =
 
 export interface EnrollmentFlowProps {
   onClose: () => void;
-onComplete: (
+  onComplete: (
     name: string,
     embedding: Float32Array,
     embeddingModel: SpeakerModelStatus,
@@ -197,11 +197,7 @@ export function EnrollmentFlow({ onClose, onComplete }: EnrollmentFlowProps) {
                 disabled={!voiceEmbedding}
                 onClick={() => {
                   if (!voiceEmbedding) return;
-<<<<<<< HEAD
-                  onComplete(name, voiceEmbedding);
-=======
                   onComplete(name, voiceEmbedding, embeddingModel, cloudProfileId);
->>>>>>> f1a7ad3baa439457d50f8980f84bf68ae8dedbc2
                   saveEnrollmentState({ isEnrolled: true, userName: name });
                 }}
               >
