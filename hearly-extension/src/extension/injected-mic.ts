@@ -1,9 +1,5 @@
-<<<<<<< HEAD
 import { StreamingRecorder } from '../audio/streamingRecorder';
 import { SPEAKER_SIMILARITY_THRESHOLD } from '../config/constants';
-
-=======
->>>>>>> f1a7ad3baa439457d50f8980f84bf68ae8dedbc2
 type HearlyPageRequest = {
   source: 'hearly-page';
   type: 'GET_MIC_STATE';
@@ -11,61 +7,7 @@ type HearlyPageRequest = {
   platform: string;
 };
 
-class LocalChunkRecorder {
-  private recorder: MediaRecorder | null = null;
-  private timer: number | null = null;
-  private chunks: Blob[] = [];
 
-  constructor(
-    private readonly stream: MediaStream,
-    private readonly onChunk: (chunkBase64: string, timestamp: number) => void,
-  ) {}
-
-  start() {
-    if (this.recorder) return;
-    this.startWindow();
-    this.timer = window.setInterval(() => this.startWindow(), 4000);
-  }
-
-  private startWindow() {
-    if (this.recorder?.state === 'recording') {
-      this.recorder.stop();
-    }
-
-    this.chunks = [];
-    const timestamp = Date.now();
-    this.recorder = new MediaRecorder(this.stream);
-    this.recorder.ondataavailable = (event) => {
-      if (event.data.size > 0) this.chunks.push(event.data);
-    };
-    this.recorder.onstop = () => {
-      const blob = new Blob(this.chunks, { type: 'audio/webm' });
-      if (blob.size === 0) return;
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        const base64 = String(reader.result).split(',')[1];
-        if (base64) this.onChunk(base64, timestamp);
-      };
-      reader.readAsDataURL(blob);
-    };
-    this.recorder.start();
-
-    window.setTimeout(() => {
-      if (this.recorder?.state === 'recording') this.recorder.stop();
-    }, 3900);
-  }
-
-  stop() {
-    if (this.timer) {
-      window.clearInterval(this.timer);
-      this.timer = null;
-    }
-    if (this.recorder?.state === 'recording') {
-      this.recorder.stop();
-    }
-    this.recorder = null;
-  }
-}
 
 type HearlyContentResponse = {
   source: 'hearly-content';
@@ -140,11 +82,7 @@ function requestMicState(): Promise<{
   return new Promise((resolve) => {
     const timeout = window.setTimeout(() => {
       window.removeEventListener('message', handleMessage);
-<<<<<<< HEAD
-      resolve({ enabled: false, embedding: null, threshold: SPEAKER_SIMILARITY_THRESHOLD, workletUrl: '', transcriptionEnabled: false });
-=======
-      resolve({ enabled: false, embedding: null, threshold: 0.58, workletUrl: '', transcriptionEnabled: false, embeddingModel: 'fallback' });
->>>>>>> f1a7ad3baa439457d50f8980f84bf68ae8dedbc2
+      resolve({ enabled: false, embedding: null, threshold: SPEAKER_SIMILARITY_THRESHOLD, workletUrl: '', transcriptionEnabled: false, embeddingModel: 'fallback' });
     }, 500);
 
     const handleMessage = (event: MessageEvent<HearlyContentResponse>) => {
@@ -194,7 +132,7 @@ function shouldProcessUserMic(constraints?: MediaStreamConstraints): boolean {
 }
 
 let activeWorkletNode: AudioWorkletNode | null = null;
-let activeMicRecorder: LocalChunkRecorder | null = null;
+let activeMicRecorder: StreamingRecorder | null = null;
 let activeMicStream: MediaStream | null = null;
 
 window.addEventListener('message', (event: MessageEvent) => {
@@ -225,7 +163,7 @@ window.addEventListener('message', (event: MessageEvent) => {
       const isEnabled = data.enabled;
       if (isEnabled) {
         if (activeMicStream && !activeMicRecorder) {
-          activeMicRecorder = new LocalChunkRecorder(activeMicStream, (chunkBase64, timestamp) => {
+          activeMicRecorder = new StreamingRecorder(activeMicStream, 'you', (chunkBase64, timestamp) => {
             postStatus({
               type: 'NEW_MIC_CHUNK',
               audioBase64: chunkBase64,
@@ -320,7 +258,7 @@ async function processUserMicStream(
   workletNode.connect(destination);
 
   if (transcriptionEnabled) {
-    activeMicRecorder = new LocalChunkRecorder(stream, (chunkBase64, timestamp) => {
+    activeMicRecorder = new StreamingRecorder(stream, 'you', (chunkBase64, timestamp) => {
       postStatus({
         type: 'NEW_MIC_CHUNK',
         audioBase64: chunkBase64,

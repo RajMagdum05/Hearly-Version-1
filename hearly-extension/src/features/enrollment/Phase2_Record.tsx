@@ -213,7 +213,6 @@ export function Phase2_Record({
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   const phraseAudioRef = useRef<Blob[]>([]);
-
   const activeWordRef = useRef(0);
 
   const completedWordsBeforeActive = phraseWords
@@ -333,7 +332,6 @@ export function Phase2_Record({
     try {
       phraseAudioRef.current.push(blob);
       return blob;
-
     } catch {
       setRecordingError('Could not read that voice sample. Please try again.');
       return null;
@@ -351,7 +349,7 @@ export function Phase2_Record({
 
     if (isFinalPhrase && !completeNotifiedRef.current) {
       completeNotifiedRef.current = true;
-const { embedding, modelStatus } = await embedEnrollmentAudio(phraseAudioRef.current);
+      const { embedding, modelStatus } = await embedEnrollmentAudio(phraseAudioRef.current);
       onTrainingComplete(
         embedding,
         [...phraseAudioRef.current],

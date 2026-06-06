@@ -22,19 +22,27 @@ class HearyVoiceProcessor extends AudioWorkletProcessor {
   private writeIndex: number = 0;
   private readonly processorSampleRate: number;
   private windowSize: number;
-  private lastMatchTime: number = 0;
+  private lastMatchTime: number = Number.NEGATIVE_INFINITY;
   private duckedGain: number = 0.08;
   private targetGain: number = 1.0;
   private currentGain: number = 1.0;
   private filterActive: boolean = false;
   private enrolledEmbedding: Float32Array | null = null;
-  private lastMatchTime: number = 0;
-  private duckedGain: number = 0.08;
+  private similarityThreshold: number = 0.58;
+  private samplesSinceEvaluation: number = 0;
+  private samplesSinceExternalWindow: number = 0;
+  private samplesSeen: number = 0;
+  private fastEnergy: number = 0;
+  private slowEnergy: number = 0;
+  private noiseFloor: number = 0.004;
+  private speechHangoverSamples: number = 0;
+  private lastVadState: boolean = false;
+  private lastVadReportTime: number = 0;
 
   constructor() {
     super();
     this.processorSampleRate = typeof sampleRate === 'number' && sampleRate > 0 ? sampleRate : 48000;
-    this.windowSize = Math.floor(this.processorSampleRate * 1.6);
+    this.windowSize = Math.floor(this.processorSampleRate * 1.6); // 1.6-second speaker window
     this.ringBuffer = new Float32Array(this.windowSize);
     
     this.port.onmessage = (event: MessageEvent) => {
@@ -44,6 +52,9 @@ class HearyVoiceProcessor extends AudioWorkletProcessor {
         this.similarityThreshold = payload.threshold ?? 0.58;
       } else if (type === 'SET_FILTER_ACTIVE') {
         this.filterActive = payload.active;
+        if (!payload.active) {
+          this.lastMatchTime = Number.NEGATIVE_INFINITY;
+        }
       } else if (type === 'SET_EXTERNAL_MATCH') {
         if (payload.matched) {
           this.lastMatchTime = currentTime;
@@ -247,33 +258,34 @@ class HearyVoiceProcessor extends AudioWorkletProcessor {
       });
     }
 
-// 3. Periodic verification evaluation
-this.samplesSinceEvaluation += length;
-this.samplesSinceExternalWindow += length;
-const evaluationInterval = Math.floor(this.processorSampleRate * 0.35);
-if (
-  this.samplesSinceExternalWindow >= evaluationInterval &&
-  hasSpeech &&
-  this.filterActive
-) {
-  this.samplesSinceExternalWindow = 0;
-  const linearBuffer = new Float32Array(this.windowSize);
-  for (let i = 0; i < this.windowSize; i++) {
-    linearBuffer[i] = this.ringBuffer[(this.writeIndex + i) % this.windowSize] ?? 0;
-  }
-  this.port.postMessage(
-    {
-      type: 'VOICE_WINDOW',
-      samples: linearBuffer.buffer,
-      sampleRate: this.processorSampleRate,
-      vadConfidence: vad.confidence,
-    },
-    [linearBuffer.buffer],
-  );
-}
+    // 3. Periodic verification evaluation
+    this.samplesSinceEvaluation += length;
+    this.samplesSinceExternalWindow += length;
+    const evaluationInterval = Math.floor(this.processorSampleRate * 0.35);
+    if (
+      this.samplesSinceExternalWindow >= evaluationInterval &&
+      hasSpeech &&
+      this.filterActive
+    ) {
+      this.samplesSinceExternalWindow = 0;
+      const linearBuffer = new Float32Array(this.windowSize);
+      for (let i = 0; i < this.windowSize; i++) {
+        linearBuffer[i] = this.ringBuffer[(this.writeIndex + i) % this.windowSize] ?? 0;
+      }
+      this.port.postMessage(
+        {
+          type: 'VOICE_WINDOW',
+          samples: linearBuffer.buffer,
+          sampleRate: this.processorSampleRate,
+          vadConfidence: vad.confidence,
+        },
+        [linearBuffer.buffer],
+      );
+    }
 
-if (
-  this.samplesSinceEvaluation >= evaluationInterval &&
+    if (
+      this.samplesSinceEvaluation >= evaluationInterval &&
+      this.samplesSeen >= this.windowSize &&
       hasSpeech &&
       this.enrolledEmbedding &&
       this.filterActive

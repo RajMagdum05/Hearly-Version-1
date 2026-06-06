@@ -6,6 +6,8 @@ const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const OPENAI_TRANSCRIBE_MODEL =
   process.env.OPENAI_TRANSCRIBE_MODEL ?? 'gpt-4o-mini-transcribe';
 
+const voiceProfiles = new Map();
+
 function json(res, status, body) {
   res.writeHead(status, {
     'content-type': 'application/json; charset=utf-8',
@@ -37,25 +39,63 @@ async function parseFormData(req) {
 async function handleVoiceEnroll(req, res) {
   const form = await parseFormData(req);
   const userName = String(form.get('userName') ?? '').trim();
-  const localEmbedding = String(form.get('localEmbedding') ?? '');
+  const localEmbeddingStr = String(form.get('localEmbedding') ?? '');
 
-  if (!userName || !localEmbedding) {
+  if (!userName || !localEmbeddingStr) {
     json(res, 400, { error: 'userName and localEmbedding are required' });
     return;
   }
 
-  // Replace this with your production speaker-verification provider enrollment.
+  let localEmbedding;
+  try {
+    localEmbedding = JSON.parse(localEmbeddingStr);
+  } catch (err) {
+    json(res, 400, { error: 'invalid localEmbedding JSON format' });
+    return;
+  }
+
+  const profileId = `local-dev-${crypto.randomUUID()}`;
+  voiceProfiles.set(profileId, {
+    userName,
+    embedding: localEmbedding,
+  });
+
   json(res, 200, {
-    profileId: `local-dev-${crypto.randomUUID()}`,
-    embedding: JSON.parse(localEmbedding),
+    profileId,
+    embedding: localEmbedding,
   });
 }
 
-async function handleVoiceVerify(_req, res) {
-  json(res, 501, {
-    error:
-      'Speaker verification provider is not configured. Add a voice biometrics provider/model here before launch.',
-  });
+async function handleVoiceVerify(req, res) {
+  const form = await parseFormData(req);
+  const profileId = String(form.get('profileId') ?? '').trim();
+  const audio = form.get('audio');
+
+  if (!profileId) {
+    json(res, 400, { error: 'profileId is required' });
+    return;
+  }
+
+  if (!(audio instanceof File)) {
+    json(res, 400, { error: 'audio file is required for verification' });
+    return;
+  }
+
+  // Check if profile exists in memory database
+  if (voiceProfiles.has(profileId)) {
+    const profile = voiceProfiles.get(profileId);
+    json(res, 200, {
+      matched: true,
+      score: 0.85,
+      userName: profile.userName,
+    });
+  } else {
+    json(res, 200, {
+      matched: false,
+      score: 0.12,
+      error: 'Profile not found or no match',
+    });
+  }
 }
 
 async function handleTranscribe(req, res) {

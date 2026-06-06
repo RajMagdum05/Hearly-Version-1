@@ -1,4 +1,5 @@
 import { AudioWaveform } from '@/ui/shared/AudioWaveform';
+import { isCloudConfigured } from '@/services/cloudService';
 
 export interface EnrolledHomePanelProps {
   userName: string;
@@ -11,6 +12,7 @@ export interface EnrolledHomePanelProps {
   voiceMatched?: boolean | null;
   speechActive?: boolean | null;
   speechConfidence?: number | null;
+  transcriptEnabled?: boolean;
 }
 
 /**
@@ -27,6 +29,7 @@ export function EnrolledHomePanel({
   voiceMatched,
   speechActive,
   speechConfidence,
+  transcriptEnabled = false,
 }: EnrolledHomePanelProps) {
   const platformName =
     audioPlatform && audioPlatform !== 'unknown'
@@ -83,6 +86,12 @@ export function EnrolledHomePanel({
           {audioError}
         </p>
       ) : null}
+
+      {!isCloudConfigured() && transcriptEnabled && (
+        <div className="mt-3 max-w-[280px] rounded-xl border border-hearly-accent/20 bg-hearly-accent/[0.02] p-2.5 text-center text-[10px] font-normal leading-normal text-hearly-secondary">
+          <span className="font-semibold text-hearly-accent">Note:</span> Cloud transcription fallback is unconfigured. Local STT model files are required for transcription.
+        </div>
+      )}
 
       {!capturing && filterActive && (
         <div className="mt-5 w-full max-w-[300px] px-0.5" role="status" aria-label="Voice filter active">

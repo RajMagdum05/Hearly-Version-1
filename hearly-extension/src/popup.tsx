@@ -298,18 +298,14 @@ function PopupApp() {
       </div>
     );
   }
-
   if (enrollmentOpen) {
     return (
       <EnrollmentFlow
         onClose={() => setEnrollmentOpen(false)}
-<<<<<<< HEAD
-        onComplete={(name, embedding) => {
-=======
         onComplete={(name, embedding, embeddingModel, cloudProfileId) => {
->>>>>>> f1a7ad3baa439457d50f8980f84bf68ae8dedbc2
           const profile = {
             id: crypto.randomUUID(),
+            cloudProfileId,
             userName: name,
             embedding,
             embeddingModel,
@@ -369,6 +365,7 @@ function PopupApp() {
                   voiceMatched={audioStatus.voiceMatched}
                   speechActive={audioStatus.speechActive}
                   speechConfidence={audioStatus.speechConfidence}
+                  transcriptEnabled={transcriptEnabled}
                 />
                 <div className="flex shrink-0 flex-col">
                   <div className="rounded-2xl border border-white/[0.07] bg-white/[0.025] p-2.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.045)]">
