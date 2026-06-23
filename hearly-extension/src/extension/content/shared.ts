@@ -175,6 +175,12 @@ export function installMicBridge(platform: string) {
       VOICE_MATCH: 'HEARLY_VOICE_MATCH',
       VOICE_ACTIVITY: 'HEARLY_VOICE_ACTIVITY',
     };
+    
+    if (data.type === 'MIC_REQUESTED') {
+      injectHearlyBanner();
+      return;
+    }
+
     const type = data.type ? map[data.type] : undefined;
     if (type) {
       chrome.runtime.sendMessage({
@@ -617,7 +623,6 @@ export function initPlatform(
   observeTarget: () => HTMLElement | null
 ) {
   installMicBridge(platform);
-  injectHearlyBanner();
   injectHearlyIndicator();
 
   const sendMeetingDetected = () => {
@@ -657,10 +662,6 @@ export function initPlatform(
           console.log(`[Hearly] ${platform} meeting ended`);
         }
         lastMeetingState = currentState;
-      }
-
-      if (!document.getElementById('hearly-banner') && !bannerDismissed) {
-        injectHearlyBanner();
       }
     });
 

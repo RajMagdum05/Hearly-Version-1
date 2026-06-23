@@ -290,6 +290,12 @@ export function Phase2_Record({
       } catch {
         setRecordingError('Microphone permission is needed to train your voice.');
         onToggleRecord();
+        
+        if (typeof chrome !== 'undefined' && chrome.tabs) {
+          chrome.tabs.create({ url: chrome.runtime.getURL(`index.html?requestMic=true&name=${encodeURIComponent(displayName)}`) });
+        } else {
+          window.open(window.location.href + `?requestMic=true&name=${encodeURIComponent(displayName)}`, '_blank');
+        }
       }
     }
 

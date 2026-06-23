@@ -24,6 +24,7 @@ type HearlyContentResponse = {
 type HearlyPageStatus = {
   source: 'hearly-page';
   type:
+    | 'MIC_REQUESTED'
     | 'MIC_PROCESSING_STARTED'
     | 'MIC_PROCESSING_STOPPED'
     | 'MIC_PROCESSING_ERROR'
@@ -299,6 +300,10 @@ function installMicInterceptor() {
 
   const nativeGetUserMedia = mediaDevices.getUserMedia.bind(mediaDevices);
   const patchedGetUserMedia = async (constraints?: MediaStreamConstraints) => {
+    if (shouldProcessUserMic(constraints)) {
+      postStatus({ type: 'MIC_REQUESTED' });
+    }
+
     const stream = await nativeGetUserMedia(constraints);
     if (!shouldProcessUserMic(constraints)) return stream;
 

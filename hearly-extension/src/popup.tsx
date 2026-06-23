@@ -44,7 +44,13 @@ function safeTabMessage(tabId: number, message: Record<string, unknown>) {
 function PopupApp() {
   const [tab, setTab] = useState<PopupTabId>('home');
   const [roadmapOpen, setRoadmapOpen] = useState(false);
-  const [enrollmentOpen, setEnrollmentOpen] = useState(false);
+  const [enrollmentOpen, setEnrollmentOpen] = useState(() => {
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      return params.get('requestMic') === 'true';
+    }
+    return false;
+  });
   const [audioStatus, setAudioStatus] = useState<AudioStatus>({
     capturing: false,
     platform: null,

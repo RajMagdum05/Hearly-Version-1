@@ -50,9 +50,27 @@ function StepHeader({ step }: { step: number }) {
 }
 
 export function EnrollmentFlow({ onClose, onComplete }: EnrollmentFlowProps) {
-  const [step, setStep] = useState(0);
-  const [name, setName] = useState('');
-  const [isRecording, setIsRecording] = useState(false);
+  const [step, setStep] = useState(() => {
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      return params.get('requestMic') === 'true' ? 1 : 0;
+    }
+    return 0;
+  });
+  const [name, setName] = useState(() => {
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      return params.get('name') || '';
+    }
+    return '';
+  });
+  const [isRecording, setIsRecording] = useState(() => {
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      return params.get('requestMic') === 'true';
+    }
+    return false;
+  });
   const [hasRecording, setHasRecording] = useState(false);
   const [voiceEmbedding, setVoiceEmbedding] = useState<Float32Array | null>(null);
   const [embeddingModel, setEmbeddingModel] = useState<SpeakerModelStatus>('fallback');
